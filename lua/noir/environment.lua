@@ -15,11 +15,6 @@ function Environment.MakeVars()
     vars.normal = trace.HitNormal
     vars.length = trace.StartPos:Distance(trace.HitPos)
 
-    if vars.this:IsValid() then
-        vars.phys = vars.this:GetPhysicsObject()
-        vars.model = vars.this:GetModel()
-    end
-
     vars.we = {}
     for _, v in pairs(ents.FindInSphere(ply:GetPos(), 512)) do
         if v:IsPlayer() then
@@ -30,6 +25,15 @@ function Environment.MakeVars()
     vars.dir = ply:GetAimVector()
 
     return vars
+end
+
+function Environment.UpdateUpvals(context)
+    local vars = context.Upvalues
+    if IsValid(vars.this) then
+        vars.phys = vars.this:GetPhysicsObject()
+        vars.model = vars.this:GetModel()
+    end
+    vars.__CONTEXT = context
 end
 
 function Environment.SendMessage(target, transferId, message, data)
@@ -155,6 +159,8 @@ function Environment.CreateContext(runner, transferId, vars)
     ContextTable.EnvTable = setmetatable({},ContextTable.META)
     Environment.Contexts[runner] = Environment.Contexts[runner] or {}
     Environment.Contexts[runner][transferId] = ContextTable
+
+    Environment.UpdateUpvals(ContextTable)
 
     if vars.__NO_CAPTURE then
         return ContextTable
