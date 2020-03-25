@@ -1,31 +1,6 @@
 local Browser = Noir.FileBrowser or {}
 Noir.FileBrowser = Browser
 
-local function getFilePath(filePath, fileName)
-    fileName = string.Trim(fileName, "/")
-
-    if filePath == "GAME" then
-        return fileName
-    else
-        return string.format("%s/%s", string.lower(filePath), fileName)
-    end
-end
-
-local function fixFilePath(filePath, fileName)
-    local fullpath = getFilePath(filePath, fileName)
-    local pathSplit = fullpath:Split("/")
-    if #pathSplit < 2 then return filePath, fileName end
-    local first_folder = table.remove(pathSplit, 1):lower()
-
-    if first_folder == "data" then
-        return "DATA", table.concat(pathSplit, "/")
-    elseif first_folder == "lua" then
-        return "LUA", table.concat(pathSplit, "/")
-    end
-
-    return filePath, fileName
-end
-
 PANEL = {}
 PANEL.FilesQueue = {}
 PANEL.QueueFrameSize = 30
@@ -119,7 +94,7 @@ function PANEL:Init()
             self:SetPath(self.Path, self.Folder)
         end, "icon16/arrow_refresh.png")
 
-        local path, _ = fixFilePath(self.Path, self.Folder)
+        local path, _ = Noir.Utils.FixFilePath(self.Path, self.Folder)
 
         if path ~= "DATA" then
             menu:Open()
@@ -131,7 +106,7 @@ function PANEL:Init()
 
         AddMenuOption(menu, "New Folder", function()
             Derma_StringRequest("New Folder", "New folder name", "New Folder", function(text)
-                local _, folder = fixFilePath(self.Path, self.Folder .. "/" .. text)
+                local _, folder = Noir.Utils.FixFilePath(self.Path, self.Folder .. "/" .. text)
                 file.CreateDir(string.Trim(folder))
                 self:SetPath(self.Path, self.Folder)
             end):SetSkin("Noir")
@@ -148,7 +123,7 @@ function PANEL:Init()
             self:SetPath(self.Path, self.Folder)
         end, "icon16/arrow_refresh.png")
 
-        local path, fileName = fixFilePath(self.Path, line.Fullpath)
+        local path, fileName = Noir.Utils.FixFilePath(self.Path, line.Fullpath)
 
         if path ~= "DATA" then
             menu:Open()
@@ -160,7 +135,7 @@ function PANEL:Init()
 
         AddMenuOption(menu, "New Folder", function()
             Derma_StringRequest("New Folder", "New folder name", "New Folder", function(text)
-                local _, folder = fixFilePath(self.Path, self.Folder .. "/" .. text)
+                local _, folder = Noir.Utils.FixFilePath(self.Path, self.Folder .. "/" .. text)
                 file.CreateDir(string.Trim(folder))
                 self:SetPath(self.Path, self.Folder)
             end):SetSkin("Noir")

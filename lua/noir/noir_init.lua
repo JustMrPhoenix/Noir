@@ -32,7 +32,7 @@ if CLIENT then
     end, nil, "Reload Noir skin")
 else
     concommand.Add("noir_reload_sv", function(ply)
-        if ply and not ply:IsSuperAdmin() then return end
+        if IsValid(ply) and not ply:IsSuperAdmin() then return end
         reload()
     end, nil, "Reload Noir lua editor")
 end
@@ -78,12 +78,15 @@ function Noir.Load()
     print("+------------------------------+")
     print("|                              |")
     loadModule("logging.lua")
+    loadModule("utils.lua")
     loadModule("execution.lua")
+    loadModule("environment.lua")
     loadModule("client/autocomplete.lua")
     loadModule("client/skin.lua")
     loadModule("client/fileBrowser.lua")
     loadModule("client/monaco_panel.lua")
     loadModule("client/editor.lua")
+    loadModule("client/repl.lua")
     print("|                              |")
     print("+-------Loading complete-------+")
     Noir.Msg("Loaded!\n")

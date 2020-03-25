@@ -43,14 +43,14 @@ function PANEL:RequestFocus()
     self.HTMLPanel:RequestFocus()
 end
 
-function PANEL:SetStatus(text, color)
-    self.StatusButton:SetText(text)
+function PANEL:SetStatus(text, color, prependTime)
+    self.StatusButton:SetText((prependTime and string.format("[%s] ", os.date("%H:%M:%S")) or "") .. text)
     self.StatusButton.BackgroundColor = color or self.StatusButton.BackgroundColor
 end
 
 function PANEL:RunJS(code, ...)
     local js = string.format(code, ...)
-    Noir.Debug("RunJS", js)
+    -- Noir.Debug("RunJS", js)
     self.HTMLPanel:RunJavascript(js)
 end
 
@@ -90,14 +90,16 @@ function PANEL:ValidateCode()
     local delta = os.clock() - start_time
 
     if compile and isstring(compile) then
-        self:SetLuaError(compile)
+        local msg, line = Noir.Utils.ParseLuaError(compile, self.VALIDATION_COMPILE)
+        self:SetLuaError(msg, line)
+        self:SetStatus(string.format("Error: %s at line %s", msg, line), Color(150, 0, 0), true)
     elseif delta > 0.05 then
-        self:SetStatus(string.format("Error: Compilation took too long (%sms)", delta), Color(150, 0, 0))
+        self:SetStatus(string.format("Error: Compilation took too long (%sms)", delta), Color(150, 0, 0), true)
         self:RunJS("gmodinterface.ClearError()")
         self.StatusButton.DoClick = function() end
     else
         self:RunJS("gmodinterface.ClearError()")
-        self:SetStatus("Validated", Color(0, 150, 0))
+        self:SetStatus("Validated", Color(0, 150, 0), true)
 
         self.StatusButton.DoClick = function()
             self:ValidateCode()
@@ -105,12 +107,8 @@ function PANEL:ValidateCode()
     end
 end
 
-function PANEL:SetLuaError(message, identifier)
-    identifier = identifier or self.VALIDATION_COMPILE
-    local line, msg = string.match(message, string.PatternSafe( identifier ) .. ":(%d*):(.+)")
-    Noir.Debug("SetLuaError", message, line, msg)
-    self:SetStatus(string.format("Error: %s at line %s", msg, line), Color(150, 0, 0))
-    self:RunJS([[gmodinterface.SetError(%s, "%s")]], line, msg:JavascriptSafe())
+function PANEL:SetLuaError(message, line)
+    self:RunJS([[gmodinterface.SetError(%s, "%s")]], line, message:JavascriptSafe())
 
     self.StatusButton.DoClick = function()
         self:RunJS("gmodinterface.GotoLine(%s)", line)
@@ -151,7 +149,7 @@ end
 
 function PANEL:AddJSCallback(name)
     self.HTMLPanel:AddFunction("gmodinterface", name, function(...)
-        Noir.Debug("JS Callback: " .. name, ...)
+        -- Noir.Debug("JS Callback: " .. name, ...)
         self["JS_" .. name](self, ...)
     end)
 end

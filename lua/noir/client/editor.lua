@@ -3,39 +3,6 @@ local Editor = Noir.Editor or {}
 Noir.Editor = Editor
 Editor.IsReady = false
 
-local function AddMenuOption(menu, label, callback, icon)
-    local option = menu:AddOption(label, callback)
-    option:SetIcon(icon)
-    option:SetTextColor(Color(200, 200, 200))
-
-    return option
-end
-
-local function getFilePath(filePath, fileName)
-    fileName = string.Trim(fileName, "/")
-
-    if filePath == "GAME" then
-        return fileName
-    else
-        return string.format("%s/%s", string.lower(filePath), fileName)
-    end
-end
-
-local function fixFilePath(filePath, fileName)
-    local fullpath = getFilePath(filePath, fileName)
-    local pathSplit = fullpath:Split("/")
-    if #pathSplit < 2 then return filePath, fileName end
-    local first_folder = table.remove(pathSplit, 1):lower()
-
-    if first_folder == "data" then
-        return "DATA", table.concat(pathSplit, "/")
-    elseif first_folder == "lua" then
-        return "LUA", table.concat(pathSplit, "/")
-    end
-
-    return filePath, fileName
-end
-
 function Editor.Show()
     if IsValid(Editor.Frame) then
         Editor.Frame:Show()
@@ -142,13 +109,13 @@ function Editor.CreateFrame()
     fileMenu:SetDrawColumn(true)
     fileMenu:Hide()
 
-    AddMenuOption(fileMenu, "New", function()
+    Noir.Utils.AddMenuOption(fileMenu, "New", function()
         Editor.CreateSesion()
     end, "icon16/page_add.png")
 
     fileMenu:AddSpacer():SetTall(10)
 
-    AddMenuOption(fileMenu, "Open", function()
+    Noir.Utils.AddMenuOption(fileMenu, "Open", function()
         Noir.FileBrowser.Open(true)
     end, "icon16/folder.png")
 
@@ -160,15 +127,15 @@ function Editor.CreateFrame()
     Editor.ReloadRecents()
     fileMenu:AddSpacer():SetTall(10)
 
-    AddMenuOption(fileMenu, "Save", function()
+    Noir.Utils.AddMenuOption(fileMenu, "Save", function()
         Editor.Save()
     end, "icon16/disk.png")
 
-    AddMenuOption(fileMenu, "Save as", function()
+    Noir.Utils.AddMenuOption(fileMenu, "Save as", function()
         Editor.SaveAs()
     end, "icon16/page_save.png")
 
-    AddMenuOption(fileMenu, "Save all", function()
+    Noir.Utils.AddMenuOption(fileMenu, "Save all", function()
         local i = 0
         local callback, session
 
@@ -178,7 +145,7 @@ function Editor.CreateFrame()
             Noir.Debug("SaveAll", session)
             if not session then return end
             if not session.Modified then return callback() end
-            Editor.SetActiveSession(session.name)
+            Editor.SetActiveTab(session.name)
             Editor.Save(session.name, callback)
         end
 
@@ -187,7 +154,7 @@ function Editor.CreateFrame()
 
     fileMenu:AddSpacer():SetTall(5)
 
-    AddMenuOption(fileMenu, "Close", function()
+    Noir.Utils.AddMenuOption(fileMenu, "Close", function()
         frame:Close()
     end)
 
@@ -215,19 +182,8 @@ function Editor.CreateFrame()
     runMenu:SetDrawColumn(true)
     runMenu:Hide()
 
-    AddMenuOption(runMenu, "Run on self", function()
-        local done, returns = Noir.RunCode(Editor.ActiveSession.code, Editor.ActiveSession.name)
-        if not done then
-            Editor.MonacoPanel:SetLuaError(returns, Editor.ActiveSession.name)
-            ErrorNoHalt(returns)
-        end
-        Editor.QueueSessionsSave()
-    end, "icon16/user.png")
-
-    AddMenuOption(runMenu, "Run on server", function()
-        Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, "server")
-        Editor.QueueSessionsSave()
-    end, "icon16/server.png")
+    Noir.Utils.AddMenuOption(runMenu, "Run on self", function() Editor.RunCode("self") end, "icon16/user.png")
+    Noir.Utils.AddMenuOption(runMenu, "Run on server", function() Editor.RunCode("server") end, "icon16/server.png")
 
     local runOnSubmenu, runOnMenu = runMenu:AddSubMenu("Run on client")
     runOnMenu:SetIcon("icon16/user_go.png")
@@ -235,14 +191,8 @@ function Editor.CreateFrame()
     runOnSubmenu:SetDeleteSelf(false)
     Editor.RunOnSubmenu = runOnSubmenu
 
-    AddMenuOption(runMenu, "Run on clients", function()
-        Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, "clients")
-        Editor.QueueSessionsSave()
-    end, "icon16/group.png")
-    AddMenuOption(runMenu, "Run on shared", function()
-        Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, "shared")
-        Editor.QueueSessionsSave()
-    end, "icon16/world.png")
+    Noir.Utils.AddMenuOption(runMenu, "Run on clients", function() Editor.RunCode("clients") end, "icon16/group.png")
+    Noir.Utils.AddMenuOption(runMenu, "Run on shared", function() Editor.RunCode("shared") end, "icon16/world.png")
 
     runMenuButton.DoClick = function()
         if not Editor.IsReady then return end
@@ -257,9 +207,8 @@ function Editor.CreateFrame()
             runOnSubmenu:GetChild(i):Remove()
         end
         for _, v in pairs(player.GetHumans()) do
-            AddMenuOption(runOnSubmenu, v:Nick(), function()
-                Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, v)
-                Editor.QueueSessionsSave()
+            Noir.Utils.AddMenuOption(runOnSubmenu, v:Nick(), function()
+                Editor.RunCode(v)
             end, v:IsSuperAdmin() and "icon16/user_suit.png" or "icon16/user.png")
         end
 
@@ -274,11 +223,11 @@ function Editor.CreateFrame()
     tabMenu:Hide()
     Editor.tabMenu = tabMenu
 
-    AddMenuOption(tabMenu, "Close", function()
+    Noir.Utils.AddMenuOption(tabMenu, "Close", function()
         Editor.CloseTab(tabMenu.session.name)
     end, "icon16/tab_delete.png")
 
-    AddMenuOption(tabMenu, "Close Others", function()
+    Noir.Utils.AddMenuOption(tabMenu, "Close Others", function()
         for name, v in pairs(Editor.SessionsByName) do
             if v ~= tabMenu.session then
                 Editor.CloseTab(name, tabMenu.session.name, true)
@@ -288,7 +237,7 @@ function Editor.CreateFrame()
         Editor.QueueSessionsSave()
     end, "icon16/tab_delete.png")
 
-    AddMenuOption(tabMenu, "Close to the right", function()
+    Noir.Utils.AddMenuOption(tabMenu, "Close to the right", function()
         local idx = table.KeyFromValue(Editor.Sessions, tabMenu.session)
 
         for i = #Editor.Sessions, idx + 1, -1 do
@@ -298,7 +247,7 @@ function Editor.CreateFrame()
         Editor.QueueSessionsSave()
     end, "icon16/tab_delete.png")
 
-    AddMenuOption(tabMenu, "Close Saved", function()
+    Noir.Utils.AddMenuOption(tabMenu, "Close Saved", function()
         for _, v in pairs(Editor.Sessions) do
             if not v.Modified then
                 Editor.CloseSession(v.name, tabMenu.session.name, true)
@@ -308,7 +257,7 @@ function Editor.CreateFrame()
         Editor.QueueSessionsSave()
     end, "icon16/tab_delete.png")
 
-    AddMenuOption(tabMenu, "Close All", function()
+    Noir.Utils.AddMenuOption(tabMenu, "Close All", function()
         local sessions = table.Copy(Editor.Sessions)
 
         for _, v in pairs(sessions) do
@@ -320,29 +269,29 @@ function Editor.CreateFrame()
 
     tabMenu:AddSpacer():SetTall(10)
 
-    tabMenu.copyPathOption = AddMenuOption(tabMenu, "Copy Path", function()
+    tabMenu.copyPathOption = Noir.Utils.AddMenuOption(tabMenu, "Copy Path", function()
         if not tabMenu.session.file then return end
-        SetClipboardText(util.RelativePathToFull(getFilePath(unpack(tabMenu.session.file))))
+        SetClipboardText(util.RelativePathToFull(Noir.Utils.GetFilePath(unpack(tabMenu.session.file))))
     end, "icon16/page_white_copy.png")
 
-    tabMenu.copyRelPathOption = AddMenuOption(tabMenu, "Copy Relative Path", function()
+    tabMenu.copyRelPathOption = Noir.Utils.AddMenuOption(tabMenu, "Copy Relative Path", function()
         if not tabMenu.session.file then return end
-        SetClipboardText(getFilePath(unpack(tabMenu.session.file)))
+        SetClipboardText(Noir.Utils.GetFilePath(unpack(tabMenu.session.file)))
     end, "icon16/page_white_copy.png")
 
     tabMenu:AddSpacer():SetTall(10)
 
-    AddMenuOption(tabMenu, "Save", function()
+    Noir.Utils.AddMenuOption(tabMenu, "Save", function()
         Editor.Save(tabMenu.session.name)
     end, "icon16/disk.png")
 
-    AddMenuOption(tabMenu, "Save as", function()
+    Noir.Utils.AddMenuOption(tabMenu, "Save as", function()
         Editor.SaveAs(tabMenu.session.name)
     end, "icon16/disk.png")
 
     tabMenu:AddSpacer():SetTall(10)
 
-    AddMenuOption(tabMenu, "Rename", function()
+    Noir.Utils.AddMenuOption(tabMenu, "Rename", function()
         Derma_StringRequest("Rename", "Enter a new name", tabMenu.session.name, function(newName)
             if Editor.SessionsByName[newName] then
                 Derma_Message("Error", "Cant rename to `" .. newName .. "`, name already taken", "Ok"):SetSkin("Noir")
@@ -406,49 +355,18 @@ function Editor.CreateFrame()
         monaco:CloseSession("Unnamed")
 
         -- monaco:AddAction(id, label, callback, keyBindings)
-        monaco:AddAction("fileNew", "File: New File", function()
-            Editor.CreateSesion()
-        end, "Mod.CtrlCmd | Key.KEY_N")
+        monaco:AddAction("fileNew", "File: New File", function() Editor.CreateSesion() end, "Mod.CtrlCmd | Key.KEY_N")
+        monaco:AddAction("fileOpen", "File: Open File...", function() Noir.FileBrowser.Open(true) end, "Mod.CtrlCmd | Key.KEY_O")
+        monaco:AddAction("fileSave", "File: Save", function() Editor.Save() end, "Mod.CtrlCmd | Key.KEY_S")
+        monaco:AddAction("fileSaveAs", "File: Save As...", function() Editor.SaveAs() end, "Mod.CtrlCmd | Mod.Shift | Key.KEY_S")
+        monaco:AddAction("fileNew", "File: New File", function() Editor.CreateSesion() end, "Mod.CtrlCmd | Key.KEY_N")
 
-        monaco:AddAction("fileOpen", "File: Open File...", function()
-            Noir.FileBrowser.Open(true)
-        end, "Mod.CtrlCmd | Key.KEY_O")
+        monaco:AddAction("sessionClose", "Close tab", function() Editor.CloseTab(Editor.ActiveSession.name) end, "Mod.CtrlCmd | Key.KEY_W")
 
-        monaco:AddAction("fileSave", "File: Save", function()
-            Editor.Save()
-        end, "Mod.CtrlCmd | Key.KEY_S")
-
-        monaco:AddAction("fileSaveAs", "File: Save As...", function()
-            Editor.SaveAs()
-        end, "Mod.CtrlCmd | Mod.Shift | Key.KEY_S")
-
-        monaco:AddAction("sessionClose", "Close tab", function()
-            Editor.CloseTab(Editor.ActiveSession.name)
-        end, "Mod.CtrlCmd | Key.KEY_W")
-        monaco:AddAction("fileNew", "File: New File", function()
-            Editor.CreateSesion()
-        end, "Mod.CtrlCmd | Key.KEY_N")
-
-        monaco:AddAction("runOnSelf", "Lua: Run on self", function()
-            local done, returns = Noir.RunCode(Editor.ActiveSession.code, Editor.ActiveSession.name)
-            if not done then
-                Editor.MonacoPanel:SetLuaError(returns, Editor.ActiveSession.name)
-                ErrorNoHalt(returns)
-            end
-            Editor.QueueSessionsSave()
-        end)
-        monaco:AddAction("runOnServer", "Lua: Run on server", function()
-            Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, "server")
-            Editor.QueueSessionsSave()
-        end)
-        monaco:AddAction("runOnServer", "Lua: Run on shared", function()
-            Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, "shared")
-            Editor.QueueSessionsSave()
-        end)
-        monaco:AddAction("runOnServer", "Lua: Run on clients", function()
-            Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, "clients")
-            Editor.QueueSessionsSave()
-        end)
+        monaco:AddAction("runOnSelf", "Lua: Run on self", function() Editor.RunCode("self") end)
+        monaco:AddAction("runOnServer", "Lua: Run on server", function() Editor.RunCode("server") end)
+        monaco:AddAction("runOnShared", "Lua: Run on shared", function() Editor.RunCode("shared") end)
+        monaco:AddAction("runOnClients", "Lua: Run on clients", function() Editor.RunCode("clients") end)
         monaco:RequestFocus()
     end
 
@@ -460,7 +378,7 @@ function Editor.CreateFrame()
             Editor.CreateSesion()
             monaco:CloseSession("Unnamed")
         else
-            Editor.SetActiveSession(session.name, true)
+            Editor.SetActiveTab(session.name, true)
         end
     end
 
@@ -498,14 +416,14 @@ function Editor.ReloadRecents()
     end
 
     for _, v in pairs(Editor.Config.recentFiles) do
-        AddMenuOption(Editor.RecentSubmenu, string.format("[%s] %s", unpack(v)), function()
+        Noir.Utils.AddMenuOption(Editor.RecentSubmenu, string.format("[%s] %s", unpack(v)), function()
             Editor.OpenFile(unpack(v))
         end, "icon16/page.png")
     end
 
     Editor.RecentSubmenu:AddSpacer()
 
-    AddMenuOption(Editor.RecentSubmenu, "Clear", function()
+    Noir.Utils.AddMenuOption(Editor.RecentSubmenu, "Clear", function()
         Editor.Config.recentFiles = {}
         Editor.SaveConfig()
         Editor.ReloadRecents()
@@ -515,8 +433,8 @@ end
 function Editor.AddTab(session)
     local pnl = vgui.Create("DPanel")
     pnl:SetSkin("Noir")
-    pnl:SetSize(120, 36)
-    pnl:SetTooltip(session.file and getFilePath(unpack(session.file)) or session.name)
+    pnl:SetSize(135, 36)
+    pnl:SetTooltip(session.file and Noir.Utils.GetFilePath(unpack(session.file)) or session.name)
     pnl.Session = session
     session.TabPanel = pnl
     table.insert(Editor.Tabs, pnl)
@@ -529,6 +447,7 @@ function Editor.AddTab(session)
     local label = pnl:Add("DLabel")
     label:SetText(session.name)
     label:Dock(LEFT)
+    label:SetSize(90, 30)
     label:DockMargin(15, 0, 0, 0)
     pnl.label = label
     local closeButton = pnl:Add("DButton")
@@ -555,7 +474,7 @@ function Editor.AddTab(session)
 
     pnl.OnMousePressed = function(_, keyCode)
         if keyCode == MOUSE_LEFT then
-            Editor.SetActiveSession(session.name)
+            Editor.SetActiveTab(session.name)
         elseif keyCode == MOUSE_RIGHT then
             if Editor.tabMenu:IsVisible() then
                 Editor.tabMenu:Hide()
@@ -567,7 +486,6 @@ function Editor.AddTab(session)
             Editor.tabMenu.copyRelPathOption:SetDisabled(session.file == nil)
             Editor.tabMenu:Open(gui.MouseX(), gui.MouseY(), false, pnl)
         elseif keyCode == MOUSE_MIDDLE then
-            -- Default vs-code behaviour middle click = close
             Editor.CloseTab(session.name)
         end
 
@@ -589,7 +507,7 @@ function Editor.AddTab(session)
     return pnl
 end
 
-function Editor.SetActiveSession(sessionName, noJS)
+function Editor.SetActiveTab(sessionName, noJS)
     if not Editor.SessionsByName[sessionName] then return end
 
     if not noJS then
@@ -669,9 +587,9 @@ function Editor.CloseSession(sessionName, nextActive, noSave)
     Editor.SessionsByName[sessionName] = nil
 
     if nextActive and Editor.SessionsByName[nextActive] then
-        Editor.SetActiveSession(nextActive)
+        Editor.SetActiveTab(nextActive)
     else
-        Editor.SetActiveSession(Editor.Sessions[#Editor.Sessions < idx and #Editor.Sessions or idx].name)
+        Editor.SetActiveTab(Editor.Sessions[#Editor.Sessions < idx and #Editor.Sessions or idx].name)
     end
 
     Editor.MonacoPanel:CloseSession(sessionName)
@@ -775,12 +693,54 @@ function Editor.GetLanguageFromFilename(fileName)
     return "plaintext"
 end
 
+function Editor.RunCode(target)
+    Editor.QueueSessionsSave()
+    local targets
+    if target == "clients" then
+        targets = #player.GetHumans()
+    elseif target == "shared" then
+        targets = #player.GetHumans() + 1
+    else
+        targets = 1
+    end
+    local id = Noir.GenerateTransferId()
+    if not id then
+        Editor.MonacoPanel:SetStatus("Could not send code! See console for details", Color(150, 0, 0))
+        return
+    end
+    local totalRan = 0
+    local hasError = false
+    Noir.Environment.RegisterHandler(function(sender, transferId, _, data)
+        totalRan = totalRan + 1
+        local done, returns = unpack(data)
+        local senderName = sender == Entity(0) and "SERVER" or tostring(sender)
+        if not done then
+            hasError = true
+            local msg, line = Noir.Utils.ParseLuaError(returns, Editor.ActiveSession.name)
+            if CLIENT and sender == LocalPlayer() then
+                Editor.MonacoPanel:SetLuaError(msg, line)
+                Editor.MonacoPanel:SetStatus(string.format("Error: %s at line %s", msg, line), Color(150, 0, 0), true)
+            else
+                Editor.MonacoPanel:SetLuaError(string.format("[%s] %s", senderName, msg), line)
+                Editor.MonacoPanel:SetStatus(string.format("[%s] Error: %s at line %s", senderName, msg, line), Color(150, 0, 0), true)
+            end
+        elseif not hasError then
+            if targets ~= 1 then
+                Editor.MonacoPanel:SetStatus(string.format("[%i/%i] Ran on %s successfully",  totalRan, targets, senderName), Color(0, 150, 0), true)
+            else
+                Editor.MonacoPanel:SetStatus(string.format("Ran on %s successfully", senderName), Color(0, 150, 0), true)
+            end
+        end
+    end, id, "run")
+    Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, target, id)
+end
+
 function Editor.OpenFile(path, fileName)
-    path, fileName = fixFilePath(path, fileName)
+    path, fileName = Noir.Utils.FixFilePath(path, fileName)
 
     for _, v in pairs(Editor.Sessions) do
         if v.file and v.file[1] == path and v.file[2] == fileName then
-            Editor.SetActiveSession(v.name)
+            Editor.SetActiveTab(v.name)
 
             return
         end
@@ -789,7 +749,7 @@ function Editor.OpenFile(path, fileName)
     local f = file.Open(fileName, "r", path)
 
     if not f then
-        Noir.Error("Cant open file ", Color(0, 200, 0), getFilePath(path, fileName), "\n")
+        Noir.Error("Cant open file ", Color(0, 200, 0), Noir.Utils.GetFilePath(path, fileName), "\n")
 
         return
     end
@@ -802,7 +762,7 @@ function Editor.OpenFile(path, fileName)
     end
 
     if Editor.SessionsByName[name] then
-        name = string.format(getFilePath(path, fileName))
+        name = string.format(Noir.Utils.GetFilePath(path, fileName))
     end
 
     for k, v in pairs(Editor.Config.recentFiles) do
@@ -860,7 +820,7 @@ function Editor.SaveAs(sessionName, callback)
         end
 
         if Editor.SessionsByName[name] and Editor.SessionsByName[name] ~= session then
-            name = string.format(getFilePath("DATA", fullname))
+            name = string.format(Noir.Utils.GetFilePath("DATA", fullname))
         end
 
         -- Editor.RenameSession(sessionName, name)
