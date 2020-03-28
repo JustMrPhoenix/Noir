@@ -95,6 +95,15 @@ function Editor.CreateFrame()
         oMousePressed(frame, mousecode)
     end
 
+    local oThink = frame.Think
+    frame.Think = function(...)
+        oThink(...)
+        if gui.IsGameUIVisible() and not gui.IsConsoleVisible() then
+            gui.HideGameUI()
+            frame:Hide()
+        end
+    end
+
     Editor.Frame = frame
     local fileMenuButton = frame:Add("DButton")
     fileMenuButton:SetTall(24)
@@ -703,7 +712,7 @@ function Editor.RunCode(target)
     else
         targets = 1
     end
-    local id = Noir.GenerateTransferId()
+    local id = Noir.Network.GenerateTransferId()
     if not id then
         Editor.MonacoPanel:SetStatus("Could not send code! See console for details", Color(150, 0, 0))
         return
@@ -969,13 +978,13 @@ concommand.Add("noir_clearconfig", function()
     Noir.Reload()
 end)
 
-if Noir.DEBUG then
-    if IsValid(Editor.Frame) then
-        Editor.Frame:Remove()
-    end
+-- if Noir.DEBUG then
+--     if IsValid(Editor.Frame) then
+--         Editor.Frame:Remove()
+--     end
 
-    Editor.Show()
-end
+--     Editor.Show()
+-- end
 
 concommand.Add("noir_showeditor", function(ply, cmd, args)
     Editor.Show()

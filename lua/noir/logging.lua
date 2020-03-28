@@ -13,6 +13,11 @@ function Noir.Error(...)
     Noir.Msg(Color(200, 0, 0), "[ERROR] ", whiteColor, ...)
 end
 
+function Noir.ErrorT(...)
+    Noir.Msg(Color(200, 0, 0), "[ERROR] ", whiteColor, ...)
+    error(...)
+end
+
 function Noir.print(...)
     print("[Noir] ", ...)
 end

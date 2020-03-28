@@ -162,43 +162,23 @@ function PANEL:OnCode(code)
         code = returnCode
     end
 
-    local targets
     if self.Target == "clients" then
-        targets = #player.GetHumans()
+        self.targets = #player.GetHumans()
     elseif self.Target == "shared" then
-        targets = #player.GetHumans() + 1
+        self.targets = #player.GetHumans() + 1
     else
-        targets = 1
+        self.targets = 1
     end
     local identifier = "Noir.repl" .. self.ReplCounter
-    local id = Noir.GenerateTransferId()
+    local id = Noir.Network.GenerateTransferId()
     self.ReplCounter = self.ReplCounter + 1
     if not id then
         Editor.MonacoPanel:SetStatus("Could not send code! See console for details", Color(150, 0, 0))
         return
     end
-    local totalRan = 0
-    local hasError = false
-    Noir.Environment.RegisterHandler(function(sender, transferId, _, data)
-        totalRan = totalRan + 1
-        local done, returns = unpack(data)
-        local senderName = sender == Entity(0) and "SERVER" or tostring(sender)
-        if not done then
-            hasError = true
-            local msg = Noir.Utils.ParseLuaError(returns, identifier)
-            if CLIENT and sender == LocalPlayer() then
-                self:SetStatus(string.format("Error:%s", msg), Color(150, 0, 0), true)
-            else
-                Editor.MonacoPanel:SetStatus(string.format("[%s] Error:%s", senderName, msg), Color(150, 0, 0), true)
-            end
-        elseif not hasError then
-            if targets ~= 1 then
-                self:SetStatus(string.format("[%i/%i] Ran on %s successfully",  totalRan, targets, senderName), Color(0, 150, 0), true)
-            else
-                self:SetStatus(string.format("Ran on %s successfully", senderName), Color(0, 150, 0), true)
-            end
-        end
-    end, id, "run")
+    self.totalRan = 0
+    self.hasError = false
+    self.lastTransfer = id
     Noir.Environment.RegisterHandler(function(...)
         local succ, err = pcall( self.OnMessage, self, self.Target, identifier, ...)
         if not succ then
@@ -208,44 +188,48 @@ function PANEL:OnCode(code)
     Noir.SendCode(code, identifier, self.Target, id)
 end
 
-function PANEL:OnMessage(target, replName, sender, transferId, message, data)
+function PANEL:OnRunResult(identifier, sender, transferId, results)
+    if transferId ~= self.lastTransfer then return end
+    self.totalRan = self.totalRan + 1
+    local done, returns = unpack(results)
+    local senderName = sender == Entity(0) and "SERVER" or tostring(sender)
+    if not done then
+        self.hasError = true
+        local msg = Noir.Utils.ParseLuaError(returns, identifier)
+        if CLIENT and sender == LocalPlayer() then
+            self:SetStatus(string.format("Error:%s", msg), Color(150, 0, 0), true)
+        else
+            Editor.MonacoPanel:SetStatus(string.format("[%s] Error:%s", senderName, msg), Color(150, 0, 0), true)
+        end
+    elseif not self.hasError then
+        if self.targets ~= 1 then
+            self:SetStatus(string.format("[%i/%i] Ran on %s successfully",  totalRan, self.targets, senderName), Color(0, 150, 0), true)
+        else
+            self:SetStatus(string.format("Ran on %s successfully", senderName), Color(0, 150, 0), true)
+        end
+    end
+end
+
+function PANEL:OnMessage(target, replName, sender, transferId, message, messageBody)
     if message == "run" then
-        if data[1] ~= true then
+        local runResults = util.JSONToTable(messageBody)
+        self:OnRunResult(replName, sender, transferId, runResults)
+        if runResults[1] == false then
             message = "ERROR"
-            data = {data[2]}
+            messageBody = runResults[2]
         else
             message = "return"
-            data = data[2]
-            if #data == 0 then return end
+            messageBody = runResults[2]
         end
     end
-    if data.args then
-        data = data.args
+    if string.find(messageBody, "\n") then
+        messageBody = "\n" .. messageBody
     end
-    local text = ""
-    if #data == 1 then
-        local str = istable(data[1]) and table.ToString(data[1], nil, true) or tostring(data[1])
-        if string.find(str, "\n") then
-            str = "\n" .. str
-        end
-        text = str
-    else
-        for k, v in pairs(data) do
-            text = text .. "\n"
-            local str = istable(v) and table.ToString(v, tostring(v), true) or tostring(v)
-            if string.find(str, "\n") then
-                str = "\n" .. str
-            end
-            text = text .. string.format("-- %s : %s", k, str)
-        end
-    end
-    if message == "run" and data[1] == true then
-        self:AddText(text)
-    elseif target == "shared" or target == "clients" then
+    if target == "shared" or target == "clients" then
         local senderName = sender == Entity(0) and "SERVER" or tostring(sender)
-        self:AddText(string.format("--[[%-13s: %s : %s]] %s", replName, senderName, message, text))
+        self:AddText(string.format("--[[%-13s: %s : %s]] %s", replName, senderName, message, messageBody))
     else
-        self:AddText(string.format("--[[%-13s: %s]] %s", replName, message, text))
+        self:AddText(string.format("--[[%-13s: %s]] %s", replName, message, messageBody))
     end
 end
 
@@ -298,6 +282,16 @@ function Noir.CreateRepl()
     frame.btnMaxim:SetVisible(false)
     frame:SetDeleteOnClose(false)
 
+    local oThink = frame.Think
+
+    frame.Think = function(...)
+        oThink(...)
+        if gui.IsGameUIVisible() and not gui.IsConsoleVisible() then
+            gui.HideGameUI()
+            frame:Hide()
+        end
+    end
+
     local repl = vgui.CreateFromTable(PANEL, frame)
     frame.Repl = repl
     repl:DockMargin(-4, -4, -4, -4)
@@ -323,6 +317,14 @@ function Noir.ShowRepl()
     end
 
     Noir.CreateRepl()
+end
+
+if Noir.DEBUG then
+    if IsValid(Noir.ReplFrame) then
+        Noir.ReplFrame:Remove()
+    end
+
+    Noir.ShowRepl()
 end
 
 concommand.Add("noir_showrepl", function(ply, cmd, args)

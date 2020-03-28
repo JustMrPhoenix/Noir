@@ -27,55 +27,22 @@ function Environment.MakeVars()
     return vars
 end
 
-function Environment.UpdateUpvals(context)
-    local vars = context.Upvalues
-    if IsValid(vars.this) then
-        vars.phys = vars.this:GetPhysicsObject()
-        vars.model = vars.this:GetModel()
-    end
-    vars.__CONTEXT = context
-end
-
-function Environment.SendMessage(target, transferId, message, data)
-    Noir.Debug("Env.SendMessage", target, transferId, message, data)
-    if target == SERVER and Entity(0) or LocalPlayer() then
-        Environment.OnMessage(target, transferId, message, data)
+function Environment.SendMessage(target, transferId, message, messageData)
+    Noir.Debug("Env.SendMessage", target, transferId, message, messageData)
+    local messageBody = Noir.Format.FormatMessage(message, messageData)
+    Noir.Debug("Env.SendMessageBODY", messageBody)
+    if target == ( SERVER and Entity(0) or LocalPlayer() ) then
+        Environment.OnMessage(target, transferId, message, messageBody)
         return
     end
-    net.Start(Noir.NetworkTag)
-    if SERVER then net.WriteEntity(Entity(0)) end
-    net.WriteUInt(2, Noir.NetworkUIntSize)
-    net.WriteEntity(target)
-    net.WriteString(transferId)
-    net.WriteString(message)
-    net.WriteTable(data)
-    if SERVER then
-        net.Send(target)
-    else
-        net.SendToServer()
-    end
+    Noir.Network.SendTransfer(nil, {message = message, origTransferId = transferId}, "scriptMessage", messageBody, target)
 end
 
-Noir.NetReceivers[2] = function (sender)
-    local destination = net.ReadEntity()
-    local transferId = net.ReadString()
-    local message = net.ReadString()
-    local data = net.ReadTable()
-    if SERVER and destination ~= Entity(0) then
-        net.Start(tag)
-        net.WriteEntity(sender)
-        net.WriteUInt(2, UIntSize)
-        net.WriteEntity(destination)
-        net.WriteString(transferId)
-        net.WriteString(message)
-        net.WriteTable(data)
-        net.Send(destination)
-    elseif destination == SERVER and Entity(0) or LocalPlayer() then
-        Noir.Environment.OnMessage(sender, transferId, message, data)
-    else
-        Noir.Error("Got unexptected scipt message from ", Color(0,200,0), sender)
+Noir.Network.StringHandlers["scriptMessage"] = {
+    received = function(sender, transferId, data)
+        Noir.Environment.OnMessage(sender, data.origTransferId, data.message, data.string)
     end
-end
+}
 
 Environment.MessageHandlers = {}
 
@@ -132,9 +99,27 @@ local function traceback()
 end
 
 Environment.Contexts = {}
+Environment.UsedContexts = {}
+
+-- Update upvalues on receiving end
+function Environment.UpdateUpvals(context)
+    local vars = context.Upvalues
+    if IsValid(vars.this) then
+        vars.phys = vars.this:GetPhysicsObject()
+        vars.model = vars.this:GetModel()
+    end
+    if Environment.UsedContexts[context.Runner] then
+        local lastRun = Environment.UsedContexts[context.Runner].RunResults
+        if lastRun and lastRun[1] == true then
+            vars.last = lastRun[2]
+        end
+    end
+    vars.__CONTEXT = context
+end
 
 function Environment.CreateContext(runner, transferId, vars)
     local ContextTable = {}
+    ContextTable.ID = transferId
     ContextTable.Runner = runner
     ContextTable.RunnerSteamID = runner:SteamID()
     ContextTable.IsloateGlobal = vars.__ISOLATE_GLOBALS or false
@@ -159,6 +144,8 @@ function Environment.CreateContext(runner, transferId, vars)
     ContextTable.EnvTable = setmetatable({},ContextTable.META)
     Environment.Contexts[runner] = Environment.Contexts[runner] or {}
     Environment.Contexts[runner][transferId] = ContextTable
+    Environment.UsedContexts[runner] = Environment.UsedContexts[runner] or {}
+    table.insert(Environment.UsedContexts[runner], ContextTable)
 
     Environment.UpdateUpvals(ContextTable)
 
@@ -180,10 +167,13 @@ function Environment.CreateContext(runner, transferId, vars)
 end
 
 concommand.Add("noir_clearenvs", function(ply)
-    if SERVER and not IsValid(ply) and not ply:IsSuperAdmin() then return end
+    if SERVER and IsValid(ply) and not ply:IsSuperAdmin() then return end
+    local cleared = 0
     for k, v in pairs(Environment.Contexts) do
         if not IsValid(k) then
+            cleared = cleared + #Environment.Contexts[k]
             Environment.Contexts[k] = nil
         end
     end
+    Noir.Msg("Cleared ", Color(0,150, 0), tostring(cleared), Color(255,255,255), " envs.")
 end, nil, "Clears unused Noir environments")
