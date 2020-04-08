@@ -11,11 +11,39 @@ keybind.shiftKey = true;
 keybind.keyCode = monaco.KeyCode.KEY_P;
 editor._standaloneKeybindingService.updateResolver();]]
 
+local function addColumn(listView, name)
+    local column = listView:AddColumn(name)
+    column.Header.BackgroundColor = Color(40, 40, 40)
+    column.Header.HoveredColor = Color(70, 70, 70)
+
+    return column
+end
+
 function PANEL:Init()
     self:SetCookieName("NoirLuaEditor")
     self.HTMLPanel = self:Add("DHTML")
     self.HTMLPanel:Dock(FILL)
     self:SetupHTML()
+
+    self.ErrorList = self:Add("DListView")
+    self.ErrorList:Dock(BOTTOM)
+    self.ErrorList:SetPaintBackground(false)
+    self.ErrorList:SetMultiSelect(false)
+    self.ErrorList:SetVisible(false)
+    self.ErrorList:SetTall(0)
+    local icon_column = addColumn(self.ErrorList, "")
+    icon_column:SetMinWidth(16)
+    icon_column:SetWidth(16)
+    icon_column:SetMaxWidth(16)
+    addColumn(self.ErrorList, "Message")
+    addColumn(self.ErrorList, "Code"):SetMaxWidth(40)
+    addColumn(self.ErrorList, "Line"):SetMaxWidth(25)
+
+    self.ErrorList.DoDoubleClick = function(_, _, line)
+        if not line.event then return end
+        self:RunJS("gmodinterface.GotoLine(%s)", line.event.line)
+    end
+
     self.StatusButton = self:Add("DButton")
     self.StatusButton:SetSkin("Noir")
     self.StatusButton:Dock(BOTTOM)
@@ -35,6 +63,7 @@ function PANEL:Init()
     self.LastEdit = CurTime()
     self.LastValidated = CurTime()
     self.Actions = {}
+    self.LastReportEvents = {}
     self.Ready = false
 end
 
@@ -58,11 +87,6 @@ function PANEL:ValidateCode()
     if self.Code == "" then
         self:SubmitLuaReport({})
         self:SetStatus("Validated", Color(0, 150, 0))
-
-        self.StatusButton.DoClick = function()
-            self:ValidateCode()
-        end
-
         return
     end
 
@@ -74,8 +98,12 @@ function PANEL:ValidateCode()
             langName = self.LanguageData.aliases[1]
         end
 
-        self:SetStatus(("No validation (%s)"):format(langName), Color(0, 150, 0))
+        self:SetStatus(("No validation (%s)"):format(langName), Color(0, 150, 0), true)
+        return
+    end
 
+    if not luacheck then
+        self:SetStatus("No validation: luacheck not found", Color(0, 150, 0), true)
         return
     end
 
@@ -99,16 +127,26 @@ function PANEL:ValidateCode()
     end
     if succ then
         local luaReportEvents = {}
+        self.ErrorList:Clear()
+        self.ErrorList:ClearSelection()
         for _, event in pairs(events) do
             local code = tostring(event.code)
-            table.insert(luaReportEvents, {
-                message = luacheck.get_message(event),
-                isError = code[1] == "0",
+            local isError = code[1] == "0"
+            local message = luacheck.get_message(event)
+            local reportEvent =  {
+                message = message,
+                isError = isError,
                 line = event.line,
                 startColumn = event.column,
                 endColumn = event.end_column,
                 luacheckCode = code,
-            })
+            }
+            table.insert(luaReportEvents, reportEvent)
+            -- icon16/cancel.png or icon16/error.png
+            local icon = vgui.Create("DImage", self.ErrorList)
+            icon:SetImage(isError and "icon16/cancel.png" or "icon16/error.png")
+            local line = self.ErrorList:AddLine(icon, message, code, event.line)
+            line.event = reportEvent
         end
         self:SubmitLuaReport(luaReportEvents)
     else
@@ -117,17 +155,33 @@ function PANEL:ValidateCode()
 end
 
 function PANEL:SubmitLuaReport(events)
+    self.LastReportEvents = events
     self:RunJS([[gmodinterface.SubmitLuaReport(%s)]], util.TableToJSON({events = events}))
+end
 
-    if #events > 0 then
-        self.StatusButton.DoClick = function()
-            self:RunJS("gmodinterface.GotoLine(%s)", events[1].line)
-        end
-    else
-        self.StatusButton.DoClick = function()
-            self:ValidateCode()
-        end
-    end
+function PANEL:AddLuaError(msg, errorLine)
+    local icon = vgui.Create("DImage", self.ErrorList)
+    icon:SetImage("icon16/cancel.png")
+    local line = self.ErrorList:AddLine(icon, msg, "", errorLine)
+    local reportEvent = {
+        message = msg,
+        isError = true,
+        line = tonumber(errorLine),
+        startColumn = 0,
+        endColumn = 100,
+        luacheckCode = "000"
+    }
+    line.event = reportEvent
+    Noir.Debug("AddLuaError", reportEvent, line, msg)
+    table.insert(self.LastReportEvents, reportEvent)
+    self:SubmitLuaReport(self.LastReportEvents)
+end
+
+function PANEL:ToggleErrorList()
+    local isVisible = not self.ErrorList:IsVisible()
+    self.ErrorList:SetVisible(isVisible)
+    self.ErrorList:SetTall(isVisible and 100 or 0)
+    self:InvalidateLayout()
 end
 
 function PANEL:JS_OnReady(avaliableLaungages)
@@ -136,6 +190,9 @@ function PANEL:JS_OnReady(avaliableLaungages)
     self:SetStatus("Ready", Color(0, 150, 0))
     self.avaliableLaungages = avaliableLaungages
     self.Ready = true
+    self.StatusButton.DoClick = function()
+        self:ToggleErrorList()
+    end
 
     if self.OnReady then
         self:OnReady()

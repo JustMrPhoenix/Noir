@@ -78,7 +78,7 @@ function Format.FormatLong( val, level )
             result = fmt("%s\n%s%s = %s,", result, string.rep(" ", (level + 1) * 4), k, str)
         end
     end
-    result = result + "\n" + string.rep(" ", level * 4) .. "}"
+    result = result .. "\n" .. string.rep(" ", level * 4) .. "}"
     return result
 end
 

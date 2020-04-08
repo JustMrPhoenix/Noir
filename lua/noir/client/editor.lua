@@ -309,7 +309,7 @@ function Editor.CreateFrame()
     scroller:DockMargin(-5, -5, -5, 0)
     scroller:SetTall(36)
     scroller:SetUseLiveDrag(true)
-    scroller:SetOverlap(0)
+    scroller:SetOverlap(-2)
     scroller:MakeDroppable("TabsDrop")
 
     scroller.OnDragModified = function()
@@ -330,6 +330,7 @@ function Editor.CreateFrame()
     Editor.MonacoPanel = monaco
     -- A hack to make space for resizing
     monaco.StatusButton:DockMargin(0, 0, 14, 0)
+    monaco.ErrorList:DockMargin(0, 0, 14, 0)
     monaco:SetCursor("sizenwse")
 
     monaco.OnMousePressed = function(_, ...)
@@ -723,10 +724,10 @@ function Editor.RunCode(target)
             hasError = true
             local msg, line = Noir.Utils.ParseLuaError(returns, Editor.ActiveSession.name)
             if CLIENT and sender == LocalPlayer() then
-                Editor.MonacoPanel:SetLuaError(msg, line)
+                Editor.MonacoPanel:AddLuaError(msg, line)
                 Editor.MonacoPanel:SetStatus(Format("Error: %s at line %s", msg, line), Color(150, 0, 0), true)
             else
-                Editor.MonacoPanel:SetLuaError(Format("[%s] %s", senderName, msg), line)
+                Editor.MonacoPanel:AddLuaError(Format("[%s] %s", senderName, msg), line)
                 Editor.MonacoPanel:SetStatus(Format("[%s] Error: %s at line %s", senderName, msg, line), Color(150, 0, 0), true)
             end
         elseif not hasError then

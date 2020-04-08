@@ -77,6 +77,8 @@ function Noir.Load()
         return
     end
 
+    require("luacheck")
+
     print("+------------------------------+")
     print("|            -Noir-            |")
     print("+------------------------------+")
