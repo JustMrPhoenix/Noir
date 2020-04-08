@@ -1,8 +1,7 @@
 local PANEL = {}
 -- Since gmod does not allow you to open localhost urls im using totallynotme.hack that points to 127.0.0.1
-PANEL.URL = Noir.DEBUG and "http://totallynotme.hacks:8080" or "https://justmrphoenix.github.io/gmod-monaco"
+PANEL.URL = Noir.DEBUG and "http://totallynotme.hacks:8080" or "https://metastruct.github.io/gmod-monaco/"
 PANEL.SHOULD_VALIDATE = true
-PANEL.VALIDATION_COMPILE = "NoirEditorValidation"
 PANEL.VALIDATE_COOLDOWN = 0.5
 -- Totally hacky way to rebind command palette to Ctrl+Shift+P like in vs-code
 PANEL.CUSTOM_JS = [[console.debug("Commiting keybind HACKS")
@@ -44,21 +43,20 @@ function PANEL:RequestFocus()
 end
 
 function PANEL:SetStatus(text, color, prependTime)
-    self.StatusButton:SetText((prependTime and string.format("[%s] ", os.date("%H:%M:%S")) or "") .. text)
+    self.StatusButton:SetText((prependTime and Format("[%s] ", os.date("%H:%M:%S")) or "") .. text)
     self.StatusButton.BackgroundColor = color or self.StatusButton.BackgroundColor
 end
 
 function PANEL:RunJS(code, ...)
-    local js = string.format(code, ...)
+    local js = Format(code, ...)
     -- Noir.Debug("RunJS", js)
     self.HTMLPanel:RunJavascript(js)
 end
 
 function PANEL:ValidateCode()
     self.LastValidated = CurTime()
-
     if self.Code == "" then
-        self:RunJS("gmodinterface.ClearError()")
+        self:SubmitLuaReport({})
         self:SetStatus("Validated", Color(0, 150, 0))
 
         self.StatusButton.DoClick = function()
@@ -69,7 +67,7 @@ function PANEL:ValidateCode()
     end
 
     if self.Language ~= "glua" then
-        self:RunJS("gmodinterface.ClearError()")
+        self:SubmitLuaReport({})
         local langName = self.Language
 
         if self.LanguageData.aliases and #self.LanguageData.aliases then
@@ -78,40 +76,57 @@ function PANEL:ValidateCode()
 
         self:SetStatus(("No validation (%s)"):format(langName), Color(0, 150, 0))
 
-        self.StatusButton.DoClick = function()
-            self:ValidateCode()
-        end
-
         return
     end
 
-    local start_time = os.clock()
-    local compile = CompileString(self.Code, self.VALIDATION_COMPILE, false)
-    local delta = os.clock() - start_time
-
-    if compile and isstring(compile) then
-        local msg, line = Noir.Utils.ParseLuaError(compile, self.VALIDATION_COMPILE)
-        self:SetLuaError(msg, line)
-        self:SetStatus(string.format("Error: %s at line %s", msg, line), Color(150, 0, 0), true)
-    elseif delta > 0.05 then
-        self:SetStatus(string.format("Error: Compilation took too long (%sms)", delta), Color(150, 0, 0), true)
-        self:RunJS("gmodinterface.ClearError()")
-        self.StatusButton.DoClick = function() end
-    else
-        self:RunJS("gmodinterface.ClearError()")
-        self:SetStatus("Validated", Color(0, 150, 0), true)
-
-        self.StatusButton.DoClick = function()
-            self:ValidateCode()
+    local succ, ret = pcall(function()
+        local report = luacheck.get_report(self.Code)
+        return luacheck.filter.filter({ report })
+    end)
+    local events = succ and ret[1] or {}
+    if self.OnValidation then
+        self:OnValidation(succ, events)
+    end
+    Noir.Debug("Validation", succ, events)
+    if succ and #events > 0 then
+        if #events == 1 and tostring(events[1].code)[1] == "0" then
+            self:SetStatus(Format("Error: %s at line %s", events[1].msg, events[1].line), Color(150, 0, 0), true)
+        elseif #events > 0 then
+            self:SetStatus(Format("Has %i issue(s)", #events), Color(204, 167, 0), true)
         end
+    elseif succ and #events == 0 then
+        self:SetStatus("Validated. No issues", Color(0, 150, 0), true)
+    end
+    if succ then
+        local luaReportEvents = {}
+        for _, event in pairs(events) do
+            local code = tostring(event.code)
+            table.insert(luaReportEvents, {
+                message = luacheck.get_message(event),
+                isError = code[1] == "0",
+                line = event.line,
+                startColumn = event.column,
+                endColumn = event.end_column,
+                luacheckCode = code,
+            })
+        end
+        self:SubmitLuaReport(luaReportEvents)
+    else
+        self:SubmitLuaReport({})
     end
 end
 
-function PANEL:SetLuaError(message, line)
-    self:RunJS([[gmodinterface.SetError(%s, "%s")]], line, message:JavascriptSafe())
+function PANEL:SubmitLuaReport(events)
+    self:RunJS([[gmodinterface.SubmitLuaReport(%s)]], util.TableToJSON({events = events}))
 
-    self.StatusButton.DoClick = function()
-        self:RunJS("gmodinterface.GotoLine(%s)", line)
+    if #events > 0 then
+        self.StatusButton.DoClick = function()
+            self:RunJS("gmodinterface.GotoLine(%s)", events[1].line)
+        end
+    else
+        self.StatusButton.DoClick = function()
+            self:ValidateCode()
+        end
     end
 end
 
@@ -149,7 +164,7 @@ end
 
 function PANEL:AddJSCallback(name)
     self.HTMLPanel:AddFunction("gmodinterface", name, function(...)
-        -- Noir.Debug("JS Callback: " .. name, ...)
+        Noir.Debug("JS Callback: " .. name, ...)
         self["JS_" .. name](self, ...)
     end)
 end
@@ -267,7 +282,11 @@ function PANEL:SetupHTML()
 
     self.HTMLPanel:AddFunction("gmodinterface","OpenURL", function(url)
         Noir.Debug("OpenURL", url)
-        gui.OpenURL(url)
+        if self.OnOpenURL then
+            self:OnOpenURL(url)
+        else
+            gui.OpenURL(url)
+        end
     end)
 
     self:AddJSCallback("OnCode")

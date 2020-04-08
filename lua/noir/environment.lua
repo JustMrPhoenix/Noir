@@ -108,10 +108,16 @@ function Environment.UpdateUpvals(context)
         vars.phys = vars.this:GetPhysicsObject()
         vars.model = vars.this:GetModel()
     end
-    if Environment.UsedContexts[context.Runner] then
-        local lastRun = Environment.UsedContexts[context.Runner].RunResults
+    local contextsTbl = Environment.UsedContexts[context.Runner]
+    if contextsTbl and contextsTbl[#contextsTbl] then
+        local lastRun = contextsTbl[#contextsTbl].RunResults
         if lastRun and lastRun[1] == true then
-            vars.last = lastRun[2]
+            local lastReturn = lastRun[2]
+            if #lastReturn == 1 then
+                vars.last = lastReturn[1]
+            else
+                vars.last = lastReturn
+            end
         end
     end
     vars.__CONTEXT = context
@@ -145,9 +151,10 @@ function Environment.CreateContext(runner, transferId, vars)
     Environment.Contexts[runner] = Environment.Contexts[runner] or {}
     Environment.Contexts[runner][transferId] = ContextTable
     Environment.UsedContexts[runner] = Environment.UsedContexts[runner] or {}
+    Environment.UpdateUpvals(ContextTable)
+
     table.insert(Environment.UsedContexts[runner], ContextTable)
 
-    Environment.UpdateUpvals(ContextTable)
 
     if vars.__NO_CAPTURE then
         return ContextTable

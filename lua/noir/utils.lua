@@ -1,5 +1,13 @@
 local Utils = Noir.Utils or {}
 Noir.Utils = Utils
+local badKeyChars = {"\"", "'", ".", "\\", "//", ":", "(", ")", "%", "-", "+", " ", "\n", "\t"}
+
+function Utils.IsSafeKey(key)
+    for _, v in pairs(badKeyChars) do
+        if string.find(key, v, 1, true) ~= nil then return false end
+    end
+    return tonumber(key[1]) == nil
+end
 
 function Utils.AddMenuOption(menu, label, callback, icon)
     local option = menu:AddOption(label, callback)
@@ -15,7 +23,7 @@ function Utils.GetFilePath(filePath, fileName)
     if filePath == "GAME" then
         return fileName
     else
-        return string.format("%s/%s", string.lower(filePath), fileName)
+        return Format("%s/%s", string.lower(filePath), fileName)
     end
 end
 
@@ -35,6 +43,7 @@ function Utils.FixFilePath(filePath, fileName)
 end
 
 function Utils.ParseLuaError(message, identifier)
+    if not isstring(message) then return Noir.Format.FormatShort(message), 0 end
     local line, msg = string.match(message, string.PatternSafe( identifier ) .. ":(%d*):(.+)")
     return msg, line
 end

@@ -95,14 +95,6 @@ function Editor.CreateFrame()
         oMousePressed(frame, mousecode)
     end
 
-    local oThink = frame.Think
-    frame.Think = function(...)
-        oThink(...)
-        if gui.IsGameUIVisible() and not gui.IsConsoleVisible() then
-            gui.HideGameUI()
-            frame:Hide()
-        end
-    end
 
     Editor.Frame = frame
     local fileMenuButton = frame:Add("DButton")
@@ -361,7 +353,7 @@ function Editor.CreateFrame()
 
         Editor.IsReady = true
         monaco:LoadSessions(Editor.Sessions, Editor.Config.activeSession)
-        monaco:CloseSession("Unnamed")
+        -- monaco:CloseSession("Unnamed")
 
         -- monaco:AddAction(id, label, callback, keyBindings)
         monaco:AddAction("fileNew", "File: New File", function() Editor.CreateSesion() end, "Mod.CtrlCmd | Key.KEY_N")
@@ -404,6 +396,10 @@ function Editor.CreateFrame()
         monaco:SetAlpha(hasFocus and 255 or 190)
     end
 
+    monaco.OnOpenURL = function(_, url)
+        gui.OpenURL(url)
+    end
+
     frame.OnFocusChanged = function(_, hasFocus)
         Editor.Config.editorSize = {frame:GetSize()}
         frame:SetAlpha(hasFocus and 255 or 190)
@@ -425,7 +421,7 @@ function Editor.ReloadRecents()
     end
 
     for _, v in pairs(Editor.Config.recentFiles) do
-        Noir.Utils.AddMenuOption(Editor.RecentSubmenu, string.format("[%s] %s", unpack(v)), function()
+        Noir.Utils.AddMenuOption(Editor.RecentSubmenu, Format("[%s] %s", unpack(v)), function()
             Editor.OpenFile(unpack(v))
         end, "icon16/page.png")
     end
@@ -456,7 +452,7 @@ function Editor.AddTab(session)
     local label = pnl:Add("DLabel")
     label:SetText(session.name)
     label:Dock(LEFT)
-    label:SetSize(90, 30)
+    label:SetSize(85, 30)
     label:DockMargin(15, 0, 0, 0)
     pnl.label = label
     local closeButton = pnl:Add("DButton")
@@ -622,7 +618,7 @@ function Editor.RenameSession(sessionName, newName)
     Editor.SessionsByName[newName] = session
 
     if session.TabPanel then
-        session.TabPanel:SetTooltip(session.file and string.format("[%s] %s", unpack(session.file)) or session.name)
+        session.TabPanel:SetTooltip(session.file and Format("[%s] %s", unpack(session.file)) or session.name)
         session.TabPanel.label:SetText(newName)
     end
 
@@ -652,7 +648,7 @@ function Editor.UpdateSession(sessionName, noCodeUpdate)
     end
 
     if IsValid(session.TabPanel) then
-        session.TabPanel:SetTooltip(session.file and string.format("[%s] %s", unpack(session.file)) or session.name)
+        session.TabPanel:SetTooltip(session.file and Format("[%s] %s", unpack(session.file)) or session.name)
         session.TabPanel.label:SetText(sessionName)
         session.TabPanel.image:SetImage(session.Modified and "icon16/page_red.png" or "icon16/page.png")
     end
@@ -721,23 +717,23 @@ function Editor.RunCode(target)
     local hasError = false
     Noir.Environment.RegisterHandler(function(sender, transferId, _, data)
         totalRan = totalRan + 1
-        local done, returns = unpack(data)
+        local done, returns = unpack(util.JSONToTable(data))
         local senderName = sender == Entity(0) and "SERVER" or tostring(sender)
         if not done then
             hasError = true
             local msg, line = Noir.Utils.ParseLuaError(returns, Editor.ActiveSession.name)
             if CLIENT and sender == LocalPlayer() then
                 Editor.MonacoPanel:SetLuaError(msg, line)
-                Editor.MonacoPanel:SetStatus(string.format("Error: %s at line %s", msg, line), Color(150, 0, 0), true)
+                Editor.MonacoPanel:SetStatus(Format("Error: %s at line %s", msg, line), Color(150, 0, 0), true)
             else
-                Editor.MonacoPanel:SetLuaError(string.format("[%s] %s", senderName, msg), line)
-                Editor.MonacoPanel:SetStatus(string.format("[%s] Error: %s at line %s", senderName, msg, line), Color(150, 0, 0), true)
+                Editor.MonacoPanel:SetLuaError(Format("[%s] %s", senderName, msg), line)
+                Editor.MonacoPanel:SetStatus(Format("[%s] Error: %s at line %s", senderName, msg, line), Color(150, 0, 0), true)
             end
         elseif not hasError then
             if targets ~= 1 then
-                Editor.MonacoPanel:SetStatus(string.format("[%i/%i] Ran on %s successfully",  totalRan, targets, senderName), Color(0, 150, 0), true)
+                Editor.MonacoPanel:SetStatus(Format("[%i/%i] Ran on %s successfully",  totalRan, targets, senderName), Color(0, 150, 0), true)
             else
-                Editor.MonacoPanel:SetStatus(string.format("Ran on %s successfully", senderName), Color(0, 150, 0), true)
+                Editor.MonacoPanel:SetStatus(Format("Ran on %s successfully", senderName), Color(0, 150, 0), true)
             end
         end
     end, id, "run")
@@ -767,11 +763,11 @@ function Editor.OpenFile(path, fileName)
     local name = string.GetFileFromFilename(fileName)
 
     if Editor.SessionsByName[name] then
-        name = string.format("[%s] %s", path, name)
+        name = Format("[%s] %s", path, name)
     end
 
     if Editor.SessionsByName[name] then
-        name = string.format(Noir.Utils.GetFilePath(path, fileName))
+        name = Format(Noir.Utils.GetFilePath(path, fileName))
     end
 
     for k, v in pairs(Editor.Config.recentFiles) do
@@ -825,11 +821,11 @@ function Editor.SaveAs(sessionName, callback)
         local name = string.GetFileFromFilename(fullname)
 
         if Editor.SessionsByName[name] and Editor.SessionsByName[name] ~= session then
-            name = string.format("[%s] %s", "DATA", name)
+            name = Format("[%s] %s", "DATA", name)
         end
 
         if Editor.SessionsByName[name] and Editor.SessionsByName[name] ~= session then
-            name = string.format(Noir.Utils.GetFilePath("DATA", fullname))
+            name = Format(Noir.Utils.GetFilePath("DATA", fullname))
         end
 
         -- Editor.RenameSession(sessionName, name)
@@ -978,13 +974,13 @@ concommand.Add("noir_clearconfig", function()
     Noir.Reload()
 end)
 
--- if Noir.DEBUG then
---     if IsValid(Editor.Frame) then
---         Editor.Frame:Remove()
---     end
+if Noir.DEBUG then
+    if IsValid(Editor.Frame) then
+        Editor.Frame:Remove()
+    end
 
---     Editor.Show()
--- end
+    Editor.Show()
+end
 
 concommand.Add("noir_showeditor", function(ply, cmd, args)
     Editor.Show()

@@ -22,23 +22,6 @@ function Noir.print(...)
     print("[Noir] ", ...)
 end
 
-local function valueToStr(val)
-    local valType = type(val)
-
-    if valType == "string" then
-        val = string.Replace(val, "\n", "\\n")
-        val = string.Replace(val, "\t", "\\t")
-    elseif IsColor(val) then
-        return string.format("Color(%i,%i,%i,%i)", val.r, val.g, val.b, val.a)
-    elseif valType == "Vector" then
-        return string.format("Vector(%i,%i,%i)", val.x, val.y, val.z)
-    elseif valType == "table" then
-        return table.ToString(val, tostring(val), true)
-    end
-
-    return string.format("(%s) %s", valType, val)
-end
-
 function Noir.Debug(...)
     if not Noir.DEBUG then return end
     local args = {...}
@@ -59,7 +42,7 @@ function Noir.Debug(...)
     end
 
     for k, v in pairs(args) do
-        MsgC("\n", Color(0, 200, 0), k, whiteColor, ": ", Color(0, 150, 0), valueToStr(v))
+        MsgC("\n", Color(0, 200, 0), k, whiteColor, ": ", Color(0, 150, 0), Noir.Format.FormatLong(v))
     end
 
     MsgN("")

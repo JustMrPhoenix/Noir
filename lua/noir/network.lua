@@ -61,6 +61,12 @@ Network.Receivers = {
         if CLIENT and sender ~= Entity(0) and (sender:IsPlayer() and not sender:IsSuperAdmin()) then return end
         local transferId = net.ReadString()
         local part = net.ReadString()
+        -- TODO: Fix sending \x00
+        -- Noir.Debug("BytesLeft", net.BytesLeft())
+        -- while ({net.BytesLeft()})[2] ~= 3 do
+        --     part = part .. "\x00" .. net.ReadString()
+        --     Noir.Debug("BytesLeft", net.BytesLeft())
+        -- end
         local info = Network.Transfers[sender ~= Entity(0) and sender:SteamID() or "SERVER"][transferId]
         local target = info.target
 
@@ -171,9 +177,9 @@ function Network.SendTransfer(transferId, data, stringType, string, target)
 end
 
 function Network.GenerateTransferId()
-    local transferId = string.format("%x", math.random(0x1000000000000, 0xfffffffffffff))
+    local transferId = Format("%x", math.random(0x1000000000000, 0xfffffffffffff))
     while Network.Transfers[transferId] do -- Imagine this happening
-        transferId = string.format("%x", math.random(0x1000000000000, 0xfffffffffffff))
+        transferId = Format("%x", math.random(0x1000000000000, 0xfffffffffffff))
     end
     Network.Transfers[transferId] = "RESERVED_" .. os.time()
     return transferId

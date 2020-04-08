@@ -17,7 +17,7 @@ function Noir.RunCode(code, identifier, environment)
 
     if not table.remove(call_results, 1) then
         local msg = call_results[1]
-        Noir.Error("[", identifier, "] Error pcalling code: " .. msg, "\n")
+        Noir.Error("[", identifier, "] Error pcalling code: " .. tostring(msg), "\n")
         return false, msg
     end
 
@@ -39,9 +39,14 @@ function Noir.SendCode(code, identifier, target, transferId)
         local me = SERVER and Entity(0) or LocalPlayer()
         local context = Noir.Environment.CreateContext(me, transferId, Noir.Environment.MakeVars())
         local done, returns = Noir.RunCode(code, identifier, context.EnvTable)
+        context.RunResults = {done, returns}
+        if not done and not isstring(returns) then
+            returns = Noir.Format.FormatLong(returns)
+        end
         Noir.Environment.SendMessage(me, transferId, "run", {done, returns})
         if not done then
-            ErrorNoHalt(returns .. "\n")
+            ErrorNoHalt(Format("[%s] %s", identifier, returns))
+            print()
         end
         return transferId
     end
@@ -75,9 +80,13 @@ Noir.Network.StringHandlers["runCode"] = {
         local context = Noir.Environment.CreateContext(sender, transferId, data.vars)
         local done, returns = Noir.RunCode(data.string, data.identifier, context.EnvTable)
         context.RunResults = {done, returns}
+        if not done and not isstring(returns) then
+            returns = Noir.Format.FormatLong(returns)
+        end
         Noir.Environment.SendMessage(sender, transferId, "run", {done, returns})
         if not done then
-            ErrorNoHalt(returns .. "\n")
+            ErrorNoHalt(Format("[%s] %s", data.identifier, returns))
+            print()
         end
     end
 }

@@ -2,7 +2,7 @@ local PANEL = {}
 
 PANEL.Base = "EditablePanel"
 
-PANEL.URL = "https://justmrphoenix.github.io/gmod-monaco/repl"
+PANEL.URL = Noir.DEBUG and "http://totallynotme.hacks:8080/repl.html" or "https://metastruct.github.io/gmod-monaco//repl"
 
 function PANEL:Init()
     local html = self:Add("DHTML")
@@ -88,7 +88,7 @@ function PANEL:AddRunOption(label, target, icon, menu)
         self.Target = target
     end)
 
-    -- gmodinterface.LoadAutocompleteState("client")
+    -- replinterface.LoadAutocompleteState("client")
 
     option:SetIcon(icon)
     option:SetTextColor(Color(200, 200, 200))
@@ -106,7 +106,7 @@ function PANEL:RequestFocus()
 end
 
 function PANEL:SetStatus(text, color, prependTime)
-    self.StatusButton:SetText((prependTime and string.format("[%s] ", os.date("%H:%M:%S")) or "") .. text)
+    self.StatusButton:SetText((prependTime and Format("[%s] ", os.date("%H:%M:%S")) or "") .. text)
     self.StatusButton.BackgroundColor = color or self.StatusButton.BackgroundColor
 end
 
@@ -117,13 +117,13 @@ function PANEL:SetAlpha(alpha)
 end
 
 function PANEL:RunJS(code, ...)
-    local js = string.format(code, ...)
+    local js = Format(code, ...)
     Noir.Debug("RunJS", js)
     self.HTMLPanel:RunJavascript(js)
 end
 
 function PANEL:AddJSCallback(name)
-    self.HTMLPanel:AddFunction("gmodinterface", name, function(...)
+    self.HTMLPanel:AddFunction("replinterface", name, function(...)
         self["JS_" .. name](self, ...)
     end)
 end
@@ -142,8 +142,8 @@ function PANEL:JS_OnCode(code)
 end
 
 function PANEL:JS_OnReady(avaliableLaungages)
-    self:RunJS(Noir.Autocomplete.GetJS())
-    self:RunJS("gmodinterface.LoadAutocompleteState(\"client\")")
+    self:RunJS(Noir.Autocomplete.GetJS("replinterface"))
+    self:RunJS("replinterface.LoadAutocompleteState(\"Client\")")
     self:SetStatus("Ready", Color(0, 150, 0))
     self.avaliableLaungages = avaliableLaungages
     self.Ready = true
@@ -182,7 +182,7 @@ function PANEL:OnCode(code)
     Noir.Environment.RegisterHandler(function(...)
         local succ, err = pcall( self.OnMessage, self, self.Target, identifier, ...)
         if not succ then
-            self:AddText(string.format("--[[%s: Could not display output]] %s", identifier, err))
+            self:AddText(Format("--[[%s: Could not display output]] %s", identifier, err))
         end
     end , id)
     Noir.SendCode(code, identifier, self.Target, id)
@@ -196,16 +196,17 @@ function PANEL:OnRunResult(identifier, sender, transferId, results)
     if not done then
         self.hasError = true
         local msg = Noir.Utils.ParseLuaError(returns, identifier)
+        Noir.Debug("Repl.Error", msg, line, returns)
         if CLIENT and sender == LocalPlayer() then
-            self:SetStatus(string.format("Error:%s", msg), Color(150, 0, 0), true)
+            self:SetStatus(Format("Error:%s", msg or returns), Color(150, 0, 0), true)
         else
-            Editor.MonacoPanel:SetStatus(string.format("[%s] Error:%s", senderName, msg), Color(150, 0, 0), true)
+            Editor.MonacoPanel:SetStatus(Format("[%s] Error:%s", senderName, msg), Color(150, 0, 0), true)
         end
     elseif not self.hasError then
         if self.targets ~= 1 then
-            self:SetStatus(string.format("[%i/%i] Ran on %s successfully",  totalRan, self.targets, senderName), Color(0, 150, 0), true)
+            self:SetStatus(Format("[%i/%i] Ran on %s successfully",  totalRan, self.targets, senderName), Color(0, 150, 0), true)
         else
-            self:SetStatus(string.format("Ran on %s successfully", senderName), Color(0, 150, 0), true)
+            self:SetStatus(Format("Ran on %s successfully", senderName), Color(0, 150, 0), true)
         end
     end
 end
@@ -227,14 +228,14 @@ function PANEL:OnMessage(target, replName, sender, transferId, message, messageB
     end
     if target == "shared" or target == "clients" then
         local senderName = sender == Entity(0) and "SERVER" or tostring(sender)
-        self:AddText(string.format("--[[%-13s: %s : %s]] %s", replName, senderName, message, messageBody))
+        self:AddText(Format("--[[%-13s: %s : %s]] %s", replName, senderName, message, messageBody))
     else
-        self:AddText(string.format("--[[%-13s: %s]] %s", replName, message, messageBody))
+        self:AddText(Format("--[[%-13s: %s]] %s", replName, message, messageBody))
     end
 end
 
 function PANEL:AddText(text)
-    self:RunJS("gmodinterface.AddText(\"%s\")", text:JavascriptSafe())
+    self:RunJS("replinterface.AddText(\"%s\")", text:JavascriptSafe())
 end
 
 function PANEL:SetupHTML()
@@ -259,9 +260,13 @@ function PANEL:SetupHTML()
         Noir.Error("[", Color(0, 0, 150), "Editor", Color(255, 255, 255), "] ", ..., "\n")
     end)
 
-    self.HTMLPanel:AddFunction("gmodinterface","OpenURL", function(url)
+    self.HTMLPanel:AddFunction("replinterface","OpenURL", function(url)
         Noir.Debug("OpenURL", url)
-        gui.OpenURL(url)
+        if self.OnOpenURL then
+            self:OnOpenURL(url)
+        else
+            gui.OpenURL(url)
+        end
     end)
 
     self:AddJSCallback("OnCode")
@@ -281,16 +286,6 @@ function Noir.CreateRepl()
     frame.btnMinim:SetVisible(false)
     frame.btnMaxim:SetVisible(false)
     frame:SetDeleteOnClose(false)
-
-    local oThink = frame.Think
-
-    frame.Think = function(...)
-        oThink(...)
-        if gui.IsGameUIVisible() and not gui.IsConsoleVisible() then
-            gui.HideGameUI()
-            frame:Hide()
-        end
-    end
 
     local repl = vgui.CreateFromTable(PANEL, frame)
     frame.Repl = repl
@@ -319,13 +314,13 @@ function Noir.ShowRepl()
     Noir.CreateRepl()
 end
 
-if Noir.DEBUG then
-    if IsValid(Noir.ReplFrame) then
-        Noir.ReplFrame:Remove()
-    end
+-- if Noir.DEBUG then
+--     if IsValid(Noir.ReplFrame) then
+--         Noir.ReplFrame:Remove()
+--     end
 
-    Noir.ShowRepl()
-end
+--     Noir.ShowRepl()
+-- end
 
 concommand.Add("noir_showrepl", function(ply, cmd, args)
     Noir.ShowRepl()

@@ -16,6 +16,10 @@ local reload = function()
             Noir.FileBrowser.Frame:Remove()
         end
 
+        if IsValid(Noir.ReplFrame) then
+            Noir.ReplFrame:Remove()
+        end
+
         Noir = nil
     end
 
@@ -60,7 +64,7 @@ local function loadModule(path)
         name = string.Left(name, 12) .. "..."
     end
 
-    local str = string.format("| [%s] MODULE: %s%s |", state, name, string.rep(" ", 15 - name:len()))
+    local str = Format("| [%s] MODULE: %s%s |", state, name, string.rep(" ", 15 - name:len()))
     print(str)
     if state == "CL" and SERVER then return end
     include(path)
@@ -96,6 +100,9 @@ end
 
 if SERVER then
     AddCSLuaFile()
+    for _,filename in ipairs(file.Find("lua/includes/modules/luacheck*", "GAME")) do
+        AddCSLuaFile("includes/modules/" .. filename)
+    end
 end
 
 Noir.Load()

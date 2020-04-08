@@ -1,14 +1,5 @@
 local Autocomplete = Noir.Autocomplete or {}
 Noir.Autocomplete = Autocomplete
-local badKeyChars = {"\"", "'", ".", "\\", "//", ":", "(", ")", "%", "-", "+", " ", "\n", "\t"}
-
-function Autocomplete.IsSafeKey(key)
-    for _, v in pairs(badKeyChars) do
-        if string.find(key, v, 1, true) ~= nil then return false end
-    end
-
-    return tonumber(key[1]) == nil
-end
 
 function Autocomplete.GetValuesAndFuncs(tbl, name, scannedTbls, depth)
     scannedTbls = scannedTbls or {}
@@ -18,7 +9,7 @@ function Autocomplete.GetValuesAndFuncs(tbl, name, scannedTbls, depth)
     for k, v in pairs(tbl) do
         if not isstring(k) then continue end
         if k[1] == "_" then continue end
-        if not Autocomplete.IsSafeKey(k) then continue end
+        if not Noir.Utils.IsSafeKey(k) then continue end
         local fullname = name and name .. "." .. k or k
 
         if isfunction(v) then
@@ -44,7 +35,7 @@ function Autocomplete.GetAllClassfuncs()
         -- Make sure its an actual object and not just some _LOADED stuff
         if isstring(k) and istable(v) and (v.MetaID or v.MetaName or v.__tostring) then
             for key, val in pairs(v) do
-                if isstring(key) and isfunction(val) and not key:StartWith("__") and Autocomplete.IsSafeKey(key) then
+                if isstring(key) and isfunction(val) and not key:StartWith("__") and Noir.Utils.IsSafeKey(key) then
                     table.insert(classFucs, k .. ":" .. key)
                 end
             end
@@ -54,11 +45,12 @@ function Autocomplete.GetAllClassfuncs()
     return classFucs
 end
 
-function Autocomplete.GetJS()
+function Autocomplete.GetJS(interfaceName)
+    interfaceName = interfaceName or "gmodinterface"
     local values, funcs = Autocomplete.GetValuesAndFuncs(_G)
     table.Add(funcs, Autocomplete.GetAllClassfuncs())
-    Noir.Debug(string.format("Found %i values and %i functions for editor autocomplete", #values, #funcs))
-    local js = string.format([[gmodinterface.LoadAutocomplete({values: "%s", funcs: "%s"})]], table.concat(values, "|"), table.concat(funcs, "|"))
+    Noir.Debug(Format("Found %i values and %i functions for editor autocomplete", #values, #funcs))
+    local js = Format([[%s.LoadAutocomplete({values: "%s", funcs: "%s"})]], interfaceName, table.concat(values, "|"), table.concat(funcs, "|"))
 
     return js .. "\nconsole.log('Client autocomplete loaded')"
 end
