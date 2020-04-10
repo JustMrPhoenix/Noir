@@ -86,6 +86,16 @@ function PANEL:AddRunOption(label, target, icon, menu)
         self.TargetCombobox:SetIcon(icon)
         self.TargetCombobox:SetText(label)
         self.Target = target
+        self:RunJS("replinterface.ResetAutocompletion()")
+        if target == "server" then
+            self:RunJS("replinterface.LoadAutocompleteState(\"Server\")")
+        elseif  target == "shared" then
+            self:RunJS("replinterface.LoadAutocompleteState(\"Server\"); replinterface.LoadAutocompleteState(\"Client\")")
+            self:RunJS(Noir.Autocomplete.GetJS("replinterface"))
+        else
+            self:RunJS("replinterface.LoadAutocompleteState(\"Client\")")
+            self:RunJS(Noir.Autocomplete.GetJS("replinterface"))
+        end
     end)
 
     -- replinterface.LoadAutocompleteState("client")
@@ -141,11 +151,10 @@ function PANEL:JS_OnCode(code)
     end
 end
 
-function PANEL:JS_OnReady(avaliableLaungages)
-    self:RunJS(Noir.Autocomplete.GetJS("replinterface"))
+function PANEL:JS_OnReady()
     self:RunJS("replinterface.LoadAutocompleteState(\"Client\")")
+    self:RunJS(Noir.Autocomplete.GetJS("replinterface"))
     self:SetStatus("Ready", Color(0, 150, 0))
-    self.avaliableLaungages = avaliableLaungages
     self.Ready = true
 
     self.StatusButton.DoClick = function() end
@@ -307,7 +316,7 @@ end
 function Noir.ShowRepl()
     if IsValid(Noir.ReplFrame) then
         Noir.ReplFrame:Show()
-
+        Noir.ReplFrame:MakePopup()
         return
     end
 

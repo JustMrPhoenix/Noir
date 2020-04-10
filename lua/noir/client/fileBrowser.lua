@@ -438,6 +438,7 @@ function Browser.Open(closeOnSelect)
             Browser.Frame:Remove()
         else
             Browser.Frame:Show()
+            Browser.Frame:MakePopup()
 
             return
         end

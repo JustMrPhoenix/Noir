@@ -9,7 +9,8 @@ let keybind = editor._standaloneKeybindingService._getResolver()._lookupMap.get(
 keybind.ctrlKey = true;
 keybind.shiftKey = true;
 keybind.keyCode = monaco.KeyCode.KEY_P;
-editor._standaloneKeybindingService.updateResolver();]]
+editor._standaloneKeybindingService.updateResolver();
+gmodinterface.OnLanguages(monaco.languages.getLanguages());]]
 
 local function addColumn(listView, name)
     local column = listView:AddColumn(name)
@@ -184,11 +185,10 @@ function PANEL:ToggleErrorList()
     self:InvalidateLayout()
 end
 
-function PANEL:JS_OnReady(avaliableLaungages)
+function PANEL:JS_OnReady()
     self:RunJS(Noir.Autocomplete.GetJS())
     self:RunJS(self.CUSTOM_JS)
     self:SetStatus("Ready", Color(0, 150, 0))
-    self.avaliableLaungages = avaliableLaungages
     self.Ready = true
     self.StatusButton.DoClick = function()
         self:ToggleErrorList()
@@ -253,6 +253,10 @@ function PANEL:SetCode(code, keepViewState)
     self:RunJS([[gmodinterface.SetCode("%s", %s)]], code:JavascriptSafe(), keepViewState)
 end
 
+function PANEL:SetSessionCode(sessionName, code)
+    self:RunJS([[gmodinterface.SetSessionCode("%s", "%s")]], sessionName:JavascriptSafe(), code)
+end
+
 function PANEL:AddSnippet(name, code)
     self:RunJS([[gmodinterface.AddSnippet("%s","%s")]], name:JavascriptSafe(), code:JavascriptSafe())
 end
@@ -309,6 +313,10 @@ function PANEL:JS_OnSessionSet(session)
     self:JS_OnCode(session.code)
 end
 
+function PANEL:JS_OnLanguages(languages)
+    self.avaliableLaungages = languages
+end
+
 function PANEL:SetAlpha(alpha)
     if not self.Ready then return end
     alpha = alpha / 255
@@ -350,6 +358,7 @@ function PANEL:SetupHTML()
     self:AddJSCallback("OnAction")
     self:AddJSCallback("OnSessions")
     self:AddJSCallback("OnSessionSet")
+    self:AddJSCallback("OnLanguages")
 end
 
 vgui.Register("NoirMonacoEditor", PANEL, "EditablePanel")

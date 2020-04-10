@@ -34,6 +34,9 @@ function Noir.SendCode(code, identifier, target, transferId)
         identifier = identifier,
         vars = Noir.Environment.MakeVars()
     }
+    if string.EndsWith(code, "--full") or string.StartWith(code, "--full") then
+        data.full = true
+    end
 
     if target == "self" then
         local me = SERVER and Entity(0) or LocalPlayer()
@@ -41,9 +44,9 @@ function Noir.SendCode(code, identifier, target, transferId)
         local done, returns = Noir.RunCode(code, identifier, context.EnvTable)
         context.RunResults = {done, returns}
         if not done and not isstring(returns) then
-            returns = Noir.Format.FormatLong(returns)
+            returns = Noir.Format.FormatLong(returns, 0, data.full)
         end
-        Noir.Environment.SendMessage(me, transferId, "run", {done, returns})
+        Noir.Environment.SendMessage(me, transferId, "run", {done, returns, full = data.full})
         if not done then
             ErrorNoHalt(Format("[%s] %s", identifier, returns))
             print()
@@ -59,7 +62,9 @@ end
 
 Noir.Network.StringHandlers["runCode"] = {
     start = function(sender, transferId, data)
-        if SERVER and data.target ~= "shared" and data.target ~= "server" then
+        if SERVER then
+            Noir.Environment.UpdateVarsSV(data)
+            if data.target == "server" then return end
             Noir.Msg( "Sending code(", Color(0, 120, 205), transferId, Color(255,255,255), "): ", -- ):
                 Color(230, 220, 115), data.identifier, Color(255,255,255), " [",
                 Color(0,150,0), sender == Entity(0) and "(SERVER)" or sender:Nick() .. "(" .. sender:SteamID() .. ")",
@@ -83,7 +88,7 @@ Noir.Network.StringHandlers["runCode"] = {
         if not done and not isstring(returns) then
             returns = Noir.Format.FormatLong(returns)
         end
-        Noir.Environment.SendMessage(sender, transferId, "run", {done, returns})
+        Noir.Environment.SendMessage(sender, transferId, "run", {done, returns, full = data.full})
         if not done then
             ErrorNoHalt(Format("[%s] %s", data.identifier, returns))
             print()

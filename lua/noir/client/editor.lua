@@ -1,4 +1,3 @@
--- TODO: Split this file into modules
 local Editor = Noir.Editor or {}
 Noir.Editor = Editor
 Editor.IsReady = false
@@ -6,7 +5,7 @@ Editor.IsReady = false
 function Editor.Show()
     if IsValid(Editor.Frame) then
         Editor.Frame:Show()
-
+        Editor.Frame:MakePopup()
         return
     end
 
@@ -19,6 +18,10 @@ function Editor.CreateFrame()
     if not Editor.Config or Noir.DEBUG then
         Editor.LoadConfig()
     end
+
+    -- TODO: Add a file borwser and session list to the left of the editor like in vscode
+    -- TODO: Make a re-open feature?
+    --      In vs-code re-open only works for files so I can probably use the recent history to do it
 
     local frame = vgui.Create("DFrame")
     frame:SetSkin("Noir")
@@ -74,6 +77,7 @@ function Editor.CreateFrame()
         Editor.Config.editorPosition = {frame:GetPos()}
         Editor.SaveConfig()
         Editor.QueueSessionsSave()
+        CloseDermaMenus()
     end
 
     local oMousePressed = frame.OnMousePressed
@@ -167,7 +171,7 @@ function Editor.CreateFrame()
 
             return
         end
-
+        CloseDermaMenus()
         local x, y = fileMenuButton:LocalToScreen(0, 0)
         fileMenu:Open(x, y + fileMenuButton:GetTall(), false, fileMenuButton)
     end
@@ -203,7 +207,7 @@ function Editor.CreateFrame()
 
             return
         end
-
+        CloseDermaMenus()
         for i = 1, runOnSubmenu:ChildCount() do
             runOnSubmenu:GetChild(i):Remove()
         end
@@ -369,6 +373,31 @@ function Editor.CreateFrame()
         monaco:AddAction("runOnServer", "Lua: Run on server", function() Editor.RunCode("server") end)
         monaco:AddAction("runOnShared", "Lua: Run on shared", function() Editor.RunCode("shared") end)
         monaco:AddAction("runOnClients", "Lua: Run on clients", function() Editor.RunCode("clients") end)
+        monaco:AddAction("cycleTabs", "Cycle tabs", function()
+            local currentTab
+            for k, v in pairs(Editor.Sessions) do
+                if v.name == Editor.Config.activeSession then
+                    currentTab = k
+                end
+            end
+            local nextTab = currentTab + 1
+            if nextTab > #Editor.Sessions then
+                nextTab = 1
+            end
+            Editor.SetActiveTab(Editor.Sessions[nextTab].name)
+        end, "Mod.CtrlCmd | Key.Tab")
+        for i = 1, 9 do
+            monaco:AddAction("switchToTab" .. i, "Switch to tab " .. i, function()
+                if Editor.Sessions[i] then
+                    Editor.SetActiveTab(Editor.Sessions[i].name)
+                end
+            end, "Mod.Alt | Key.KEY_" .. i)
+        end
+        -- TODO: SpiralP asked for "Search in lua files" feature
+        --      Not sure how im going to implement
+        --      Maybe create a separte window with the results?
+        --      But what about serverside files?
+        -- TODO: Look at find usage code on meta
         monaco:RequestFocus()
     end
 
@@ -566,7 +595,7 @@ function Editor.CreateSesion(sessionName, code, fileData, sessionData)
         name = sessionName,
         code = code,
         file = fileData,
-        SavedCode = ""
+        SavedCode = fileData and code or ""
     }
 
     session = table.Merge(sessionData or {}, session)
@@ -632,21 +661,10 @@ function Editor.RenameSession(sessionName, newName)
     Editor.QueueSessionsSave()
 end
 
-function Editor.UpdateSession(sessionName, noCodeUpdate)
+function Editor.UpdateSession(sessionName)
     local session = Editor.SessionsByName[sessionName]
 
-    if session.file and not session.Modified and not noCodeUpdate then
-        local code = file.Read(session.file[2], session.file[1])
-        Noir.Debug("UpdateSession", code, session.file)
-
-        if not code or code == "" then
-            session.Modified = true
-            session.SavedCode = ""
-        else
-            session.SavedCode = code
-            Editor.MonacoPanel:SetCode(code, true)
-        end
-    end
+    -- Used to update code here with latest in file but it breaks if switching tabs fast
 
     if IsValid(session.TabPanel) then
         session.TabPanel:SetTooltip(session.file and Format("[%s] %s", unpack(session.file)) or session.name)
@@ -688,7 +706,7 @@ function Editor.GetLanguageFromFilename(fileName)
     if file_ext == ".lua" then return "glua" end
 
     -- Noir.Editor.MonacoPanel.avaliableLaungages[1].extensions
-    for _, v in pairs(Editor.MonacoPanel.avaliableLaungages) do
+    for _, v in pairs(Editor.MonacoPanel.avaliableLaungages or {}) do
         local extensions = v.extensions
 
         for _, ext in pairs(extensions) do
@@ -752,13 +770,15 @@ function Editor.OpenFile(path, fileName)
         end
     end
 
-    local f = file.Open(fileName, "r", path)
+    local f = file.Open(fileName, "rb", path)
 
     if not f then
         Noir.Error("Cant open file ", Color(0, 200, 0), Noir.Utils.GetFilePath(path, fileName), "\n")
 
         return
     end
+
+    local code = f:Read( f:Size() )
 
     f:Close()
     local name = string.GetFileFromFilename(fileName)
@@ -784,10 +804,9 @@ function Editor.OpenFile(path, fileName)
     table.insert(Editor.Config.recentFiles, 1, {path, fileName})
     Editor.ReloadRecents()
     local lang = Editor.GetLanguageFromFilename(fileName)
-    -- We can leave session code empty here, it will be set later in SessionUpdate
     Noir.Debug("OpenFile", path, fileName, name)
 
-    return Editor.CreateSesion(name, "", {path, fileName}, {
+    return Editor.CreateSesion(name, code or "", {path, fileName}, {
         language = lang
     })
 end

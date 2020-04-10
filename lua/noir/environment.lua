@@ -29,7 +29,7 @@ end
 
 function Environment.SendMessage(target, transferId, message, messageData)
     Noir.Debug("Env.SendMessage", target, transferId, message, messageData)
-    local messageBody = Noir.Format.FormatMessage(message, messageData)
+    local messageBody = Noir.Format.FormatMessage(message, messageData, messageData.full)
     Noir.Debug("Env.SendMessageBODY", messageBody)
     if target == ( SERVER and Entity(0) or LocalPlayer() ) then
         Environment.OnMessage(target, transferId, message, messageBody)
@@ -121,6 +121,12 @@ function Environment.UpdateUpvals(context)
         end
     end
     vars.__CONTEXT = context
+end
+
+-- Update upvalues on server for stuff that is not avalible clientside
+function Environment.UpdateVarsSV(data)
+    local vars = data.vars
+    vars.these = constraint.GetAllConstrainedEntities(vars.this)
 end
 
 function Environment.CreateContext(runner, transferId, vars)

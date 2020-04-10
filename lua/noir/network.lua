@@ -173,6 +173,8 @@ function Network.SendTransfer(transferId, data, stringType, string, target)
     end
     data.stringParts = #parts
     Network.StartTransfer(transferId, data, target)
+    -- TODO: Send string with data if we can
+    --      Maybe do a mannual WriteTable and check if space left at the end
     Network.SendParts(transferId, parts, target)
 end
 
