@@ -19,10 +19,7 @@ Features
 
 Screenshots
 -----------
-- Editor window
 ![Editor window](https://i.imgur.com/ttGrxIS.png)
 ![Editor window#2](https://i.imgur.com/jcmoB8C.png)
-- File browser
 ![File browser](https://i.imgur.com/lKGIlix.png)
-- Lua console
 ![Lua console](https://i.imgur.com/vXpoqtk.png)
