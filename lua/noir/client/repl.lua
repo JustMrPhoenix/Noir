@@ -90,11 +90,9 @@ function PANEL:AddRunOption(label, target, icon, menu)
         if target == "server" then
             self:RunJS("replinterface.LoadAutocompleteState(\"Server\")")
         elseif  target == "shared" then
-            self:RunJS("replinterface.LoadAutocompleteState(\"Server\"); replinterface.LoadAutocompleteState(\"Client\")")
-            self:RunJS(Noir.Autocomplete.GetJS("replinterface"))
+            self:RunJS(Noir.Autocomplete.GetJSWithState("Shared","replinterface"))
         else
-            self:RunJS("replinterface.LoadAutocompleteState(\"Client\")")
-            self:RunJS(Noir.Autocomplete.GetJS("replinterface"))
+            self:RunJS(Noir.Autocomplete.GetJSWithState("Client","replinterface"))
         end
     end)
 
@@ -152,8 +150,7 @@ function PANEL:JS_OnCode(code)
 end
 
 function PANEL:JS_OnReady()
-    self:RunJS("replinterface.LoadAutocompleteState(\"Client\")")
-    self:RunJS(Noir.Autocomplete.GetJS("replinterface"))
+    self:RunJS(Noir.Autocomplete.GetJSWithState("Client","replinterface"))
     self:SetStatus("Ready", Color(0, 150, 0))
     self.Ready = true
 

@@ -54,3 +54,9 @@ function Autocomplete.GetJS(interfaceName)
 
     return js .. "\nconsole.log('Client autocomplete loaded')"
 end
+
+
+function Autocomplete.GetJSWithState(state, interfaceName)
+    interfaceName = interfaceName or "gmodinterface"
+    return Format("%s.LoadAutocompleteState(\"%s\").then(() => {%s});", interfaceName, state, Autocomplete.GetJS(interfaceName))
+end

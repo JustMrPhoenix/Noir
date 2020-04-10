@@ -186,7 +186,7 @@ function PANEL:ToggleErrorList()
 end
 
 function PANEL:JS_OnReady()
-    self:RunJS(Noir.Autocomplete.GetJS())
+    self:RunJS(Noir.Autocomplete.GetJSWithState("Client"))
     self:RunJS(self.CUSTOM_JS)
     self:SetStatus("Ready", Color(0, 150, 0))
     self.Ready = true
