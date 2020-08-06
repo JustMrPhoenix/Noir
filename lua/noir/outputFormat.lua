@@ -15,14 +15,22 @@ local stringEscape = {
     -- ["\'"] = "\\\'"
 }
 
+local blacklistedTypes = {
+    ["proto"] = true
+}
+
 function Format.FormatShort( val )
+    local type = type(val)
+    if blacklistedTypes[type] then return tostring(val) end
     if val == nil then
         return "nil"
+    elseif type == "thread" then
+        return tostring(val), coroutine.status(val)
     elseif istable( val ) then
         if IsColor( val ) then
             return fmt("Color(%i,%i,%i,%i)", val.r, val.g, val.b, val.a)
         else
-            return fmt("{ %s#%i }", val, table.Count(val))
+            return fmt("{ tbl:%p#%i }", val, table.Count(val))
         end
     else
         if isstring( val ) then
@@ -31,8 +39,6 @@ function Format.FormatShort( val )
             return fmt("Vector(%i,%i,%i)", val.x, val.y, val.z)
         elseif isangle( val ) then
             return fmt("Angle(%i,%i,%i)", val.pitch, val.yaw, val.roll)
-        elseif isfunction( val ) then
-            return tostring( val )
         elseif isentity(val) then
             if val == game.GetWorld() then
                 return fmt("game.GetWorld()")
@@ -43,6 +49,13 @@ function Format.FormatShort( val )
             else
                 return fmt("Entity(%i)", val:EntIndex()), fmt("%s : %s", val:GetClass(), val:GetModel())
             end
+        elseif isfunction(val) then
+            local debugInfo = debug.getinfo(val)
+            if debugInfo.what == "C" then
+                return fmt("cfunc:%p", val)
+            else
+                return fmt("func:%p", val), fmt("%s[%d-%d]", debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
+            end
         else
             return tostring( val )
         end
@@ -50,8 +63,11 @@ function Format.FormatShort( val )
 end
 
 function Format.FormatLong( val, level, doFull, doneTbls )
+    local type = type(val)
+    if blacklistedTypes[type] then return tostring(val) end
     level = level or 0
     doneTbls = doneTbls or {}
+    local levelIndent = string.rep("    ", level)
     if isstring(val) then
         if string.find(val, "\n") then
             val = string.Replace(val, "\\", "\\\\")
@@ -60,19 +76,59 @@ function Format.FormatLong( val, level, doFull, doneTbls )
         else
             return Format.FormatShort(val)
         end
+    elseif type == "thread" then
+        return tostring(val), coroutine.status(val)
     elseif isbool(val) or isnumber(val) then
         return Format.FormatShort(val)
-    elseif val == nil or (  not istable(val) and not IsValid(val) ) then
-        return Format.FormatShort( val )
     elseif isentity(val) then
-        if val:IsPlayer() then
-            return fmt("-- %s : %s\n-- %s\n-- %s\n-- http://steamcommunity.com/profiles/%s \n%s", Format.FormatShort(val), val:Nick(), val:SteamID(), val:GetModel(), val:SteamID64(), Format.FormatLong( val:GetTable(), level, doFull, doneTbls))
+        if IsValid(val) then
+            if val:IsPlayer() then
+                return fmt("-- %s : %s\n%s-- %s\n%s-- %s\n%s-- http://steamcommunity.com/profiles/%s \n%s%s", Format.FormatShort(val), val:Nick(), levelIndent, val:SteamID(), levelIndent, val:GetModel(), levelIndent, val:SteamID64(), levelIndent, Format.FormatLong( val:GetTable(), level, doFull, doneTbls))
+            else
+                return fmt("-- %s\n%s-- %s\n%s-- %s\n%s%s", Format.FormatShort(val), levelIndent, val:GetClass(), levelIndent, val:GetModel(), levelIndent, Format.FormatLong( val:GetTable(), level, doFull, doneTbls))
+            end
         else
-            return fmt("-- %s\n-- %s\n-- %s\n%s", Format.FormatShort(val), val:GetClass(), val:GetModel(), Format.FormatLong( val:GetTable(), level, doFull, doneTbls))
+            return Format.FormatShort(val)
+        end
+
+    elseif isfunction(val) then
+        local debugInfo = debug.getinfo(val)
+        if debugInfo.what == "C" then
+            return fmt("cfunc:%p", val)
+        else
+            local fullpath = debugInfo.short_src
+            local info
+            if debugInfo.source ~= "@"..debugInfo.short_src then
+                info = fmt("%s\n%s-- %s\n%s-- %d-%d", debugInfo.source, levelIndent,  debugInfo.short_src, levelIndent, debugInfo.linedefined, debugInfo.lastlinedefined)
+            else
+                
+                info = fmt("%s:%d-%d", debugInfo.source, debugInfo.linedefined, debugInfo.lastlinedefined)
+            end
+            if file.Exists(fullpath, "GAME") then
+                local fileContent = file.Read(fullpath, "GAME")
+                local lines = string.Split(fileContent, "\n")
+                if debugInfo.lastlinedefined > #lines then 
+                    return fmt("%sfunc(%p)", levelIndent, val), info
+                end
+                local indent = "^"..string.match(lines[debugInfo.linedefined], "^%s*")
+                local result = string.gsub(lines[debugInfo.linedefined], indent, "")
+                if debugInfo.linedefined == debugInfo.lastlinedefined then
+                    return string.Trim(result), info
+                else
+                    for i = debugInfo.linedefined + 1, debugInfo.lastlinedefined do
+                        result = result .. "\n" .. levelIndent .. string.gsub(lines[i], indent, "")
+                    end
+                    return string.Trim(result), info
+                end
+            else
+                return fmt("func(%p)",val), info
+            end
         end
     elseif val and not istable(val) and isfunction(val.GetTable) then
         return fmt("-- %s\n%s", Format.FormatShort(val), Format.FormatLong( val:GetTable(), level, doFull, doneTbls))
     elseif not istable( val ) or IsColor( val ) then
+        return Format.FormatShort( val )
+    elseif val == nil or ( not istable(val) and not IsValid(val) ) then
         return Format.FormatShort( val )
     end
     local total = table.Count(val)
@@ -90,12 +146,14 @@ function Format.FormatLong( val, level, doFull, doneTbls )
             local str, cmt
             if ( doFull or (level == 0 and istable(v) and table.Count(v) < 6) ) and not doneTbls[v] then
                 doneTbls[v] = true
-                str = Format.FormatLong(v, level + 1, doFull, doneTbls)
+                str, cmt = Format.FormatLong(v, level + 1, doFull, doneTbls)
             else
                 str, cmt = Format.FormatShort(v)
             end
-            if cmt then
+            if cmt and string.find(cmt, "\n") then
                 cmt = fmt(" --[[ %s ]]", cmt)
+            elseif cmt then
+                cmt = fmt(" -- %s", cmt)
             end
             result = fmt("%s\n%s%s,%s", result, string.rep(" ", (level + 1) * 4), str, cmt or "")
         else
@@ -107,12 +165,14 @@ function Format.FormatLong( val, level, doFull, doneTbls )
             local str, cmt
             if ( doFull or (level == 0 and istable(v) and table.Count(v) < 6) ) and not doneTbls[v] then
                 doneTbls[v] = true
-                str = Format.FormatLong(v, level + 1, doFull, doneTbls)
+                str, cmt = Format.FormatLong(v, level + 1, doFull, doneTbls)
             else
                 str, cmt = Format.FormatShort(v)
             end
-            if cmt then
+            if cmt and string.find(cmt, "\n") then
                 cmt = fmt(" --[[ %s ]]", cmt)
+            elseif cmt then
+                cmt = fmt(" -- %s", cmt)
             end
             result = fmt("%s\n%s%s = %s,%s", result, string.rep(" ", (level + 1) * 4), k, str, cmt or "")
         end
@@ -135,15 +195,20 @@ function Format.FormatMessage(message, messageData, displayFull)
     end
     local text = ""
     if #messageData == 1 then
-        text = Format.FormatLong(messageData[1], 0, displayFull)
+        local formated, cmt = Format.FormatLong(messageData[1], 0, displayFull)
+        if cmt then
+            text = fmt("-- %s\n%s", cmt, formated)
+        else
+            text = formated
+        end
     else
         local lines = {}
         for k, v in pairs(messageData) do
-            v = Format.FormatLong(v, 0, displayFull)
+            local formated, cmt = Format.FormatLong(v, 0, displayFull)
             if string.find(v, "\n") then
-                v = "\n" .. v
+                formated = "\n" .. formated .. "-- " .. cmt
             end
-            table.insert(lines, fmt("-- %s : %s", k, v))
+            table.insert(lines, fmt("-- %s : %s", k, formated))
         end
         text = table.concat(lines, "\n")
     end

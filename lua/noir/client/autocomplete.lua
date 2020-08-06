@@ -7,6 +7,7 @@ function Autocomplete.GetValuesAndFuncs(tbl, name, scannedTbls, depth)
     local values, functions = {}, {}
 
     for k, v in pairs(tbl) do
+        -- nolint
         if not isstring(k) then continue end
         if k[1] == "_" then continue end
         if not Noir.Utils.IsSafeKey(k) then continue end
@@ -60,3 +61,17 @@ function Autocomplete.GetJSWithState(state, interfaceName)
     interfaceName = interfaceName or "gmodinterface"
     return Format("%s.LoadAutocompleteState(\"%s\").then(() => {%s});", interfaceName, state, Autocomplete.GetJS(interfaceName))
 end
+
+concommand.Add("noir_reload_autocomplete", function()
+    local values, funcs = Autocomplete.GetValuesAndFuncs(_G)
+    table.Add(funcs, Autocomplete.GetAllClassfuncs())
+    Noir.Debug(Format("Found %i values and %i functions for editor autocomplete", #values, #funcs))
+    values, funcs = table.concat(values, "|"), table.concat(funcs, "|")
+    if IsValid(Noir.Editor.Frame) and Noir.Editor.MonacoPanel.Ready then
+        Noir.Editor.MonacoPanel:RunJS([[gmodinterface.LoadAutocomplete({values: "%s", funcs: "%s"})]], interfaceName, values, funcs)
+    end
+
+    if IsValid(Noir.ReplFrame) and Noir.ReplFrame.Repl.Ready then
+        Noir.ReplFrame.Repl:RunJS([[replinterface.LoadAutocomplete({values: "%s", funcs: "%s"})]], interfaceName, values, funcs)
+    end
+end)

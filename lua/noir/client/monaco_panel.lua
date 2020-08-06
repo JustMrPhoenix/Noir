@@ -1,6 +1,6 @@
 local PANEL = {}
 -- Since gmod does not allow you to open localhost urls im using totallynotme.hack that points to 127.0.0.1
-PANEL.URL = Noir.DEBUG and "http://totallynotme.hacks:8080" or "https://metastruct.github.io/gmod-monaco/"
+PANEL.URL = Noir.DEBUG and "http://loopback.bestboy.moe:8080" or "https://metastruct.github.io/gmod-monaco/"
 PANEL.SHOULD_VALIDATE = true
 PANEL.VALIDATE_COOLDOWN = 0.5
 -- Totally hacky way to rebind command palette to Ctrl+Shift+P like in vs-code
@@ -9,8 +9,7 @@ let keybind = editor._standaloneKeybindingService._getResolver()._lookupMap.get(
 keybind.ctrlKey = true;
 keybind.shiftKey = true;
 keybind.keyCode = monaco.KeyCode.KEY_P;
-editor._standaloneKeybindingService.updateResolver();
-gmodinterface.OnLanguages(monaco.languages.getLanguages());]]
+editor._standaloneKeybindingService.updateResolver();]]
 
 local function addColumn(listView, name)
     local column = listView:AddColumn(name)
@@ -313,8 +312,12 @@ function PANEL:JS_OnSessionSet(session)
     self:JS_OnCode(session.code)
 end
 
-function PANEL:JS_OnLanguages(languages)
+function PANEL:JS_OnLanguages(_, languages)
     self.avaliableLaungages = languages
+end
+
+function PANEL:JS_OnThemesLoaded()
+    -- Do nothing
 end
 
 function PANEL:SetAlpha(alpha)
@@ -359,6 +362,7 @@ function PANEL:SetupHTML()
     self:AddJSCallback("OnSessions")
     self:AddJSCallback("OnSessionSet")
     self:AddJSCallback("OnLanguages")
+    self:AddJSCallback("OnThemesLoaded")
 end
 
 vgui.Register("NoirMonacoEditor", PANEL, "EditablePanel")

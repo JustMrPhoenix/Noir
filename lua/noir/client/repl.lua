@@ -2,7 +2,7 @@ local PANEL = {}
 
 PANEL.Base = "EditablePanel"
 
-PANEL.URL = Noir.DEBUG and "http://totallynotme.hacks:8080/repl.html" or "https://metastruct.github.io/gmod-monaco//repl"
+PANEL.URL = Noir.DEBUG and "http://loopback.bestboy.moe:8080/repl.html" or "https://metastruct.github.io/gmod-monaco/repl.html"
 
 function PANEL:Init()
     local html = self:Add("DHTML")
@@ -320,13 +320,12 @@ function Noir.ShowRepl()
     Noir.CreateRepl()
 end
 
--- if Noir.DEBUG then
---     if IsValid(Noir.ReplFrame) then
---         Noir.ReplFrame:Remove()
---     end
-
---     Noir.ShowRepl()
--- end
+if Noir.DEBUG then
+    if IsValid(Noir.ReplFrame) then
+        Noir.ReplFrame:Remove()
+    end
+    Noir.ShowRepl()
+end
 
 concommand.Add("noir_showrepl", function(ply, cmd, args)
     Noir.ShowRepl()

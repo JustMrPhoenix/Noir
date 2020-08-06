@@ -994,13 +994,12 @@ concommand.Add("noir_clearconfig", function()
     Noir.Reload()
 end)
 
-if Noir.DEBUG then
-    if IsValid(Editor.Frame) then
-        Editor.Frame:Remove()
-    end
-
-    Editor.Show()
-end
+-- if Noir.DEBUG then
+--     if IsValid(Editor.Frame) then
+--         Editor.Frame:Remove()
+--     end
+--     Editor.Show()
+-- end
 
 concommand.Add("noir_showeditor", function(ply, cmd, args)
     Editor.Show()
