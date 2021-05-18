@@ -34,7 +34,7 @@ function Noir.SendCode(code, identifier, target, transferId)
         identifier = identifier,
         vars = Noir.Environment.MakeVars()
     }
-    if string.EndsWith(code, "--full") or string.StartWith(code, "--full") then
+    if string.EndsWith(string.lower(code), "--full") or string.StartWith(string.lower(code), "--full") then
         data.full = true
     end
 

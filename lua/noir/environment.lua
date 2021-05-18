@@ -7,7 +7,7 @@ function Environment.MakeVars()
     if SERVER or not IsValid(ply) then return {} end
     local vars = {}
     vars.me = ply
-    local trace = util.QuickTrace(ply:EyePos(), ply:GetAimVector() * 10000, {ply, ply:GetVehicle()})
+    local trace = util.QuickTrace(ply:EyePos(), ply:GetAimVector() * 100000, {ply, ply:GetVehicle()})
     vars.trace = trace
     vars.this = trace.Entity
     vars.there = trace.HitPos
@@ -101,6 +101,191 @@ end
 Environment.Contexts = {}
 Environment.UsedContexts = {}
 
+local function compare(a, b)
+
+	if a == b then return true end
+	if a:find(b, nil, true) then return true end
+	if a:lower() == b:lower() then return true end
+	if a:lower():find(b:lower(), nil, true) then return true end
+
+	return false
+end
+
+local function comparenick(a, b)
+	if not GLib then return compare (a, b) end
+	
+	if a == b then return true end
+	if a:lower() == b:lower() then return true end
+	if GLib.UTF8.MatchTransliteration(a, b) then return true end
+
+	return false
+end
+
+local function compareentity(ent, str)
+	if ent.GetName and compare(ent:GetName(), str) then
+		return true
+	end
+
+	if ent:GetModel() and compare(ent:GetModel(), str) then
+		return true
+	end
+
+	return false
+end
+
+-- this function was stolen from easylua
+-- whoever made easylua takes credit, i cant find the original now
+function Environment.FindEntity(str)
+	if not str then return NULL end
+
+	str = tostring(str)
+
+	if str == "#this" and IsEntity(this) and this:IsValid() then
+		return this
+	end
+
+	if str == "#me" and IsEntity(me) and me:IsPlayer() then
+		return me
+	end
+
+	if str == "#all" then
+		return all
+	end
+
+	if str:sub(1,1) == "#" then
+		local str = str:sub(2)
+
+		if #str > 0 then
+			str = str:lower()
+			local found
+			for key, data in pairs(team.GetAllTeams()) do
+				if data.Name:lower() == str then
+					found = data.Name:lower()
+					break
+				end
+			end
+
+			if not found then
+				local classes = {}
+
+				for key, ent in pairs(ents.GetAll()) do
+					classes[ent:GetClass():lower()] = true
+				end
+
+				for class in pairs(classes) do
+					if class:lower() == str then
+						print("found", class)
+						found = class
+					end
+				end
+			end
+
+			if found then
+				local func = CreateAllFuncton(function(v) return v:GetClass():lower() == class end)
+				print(func:GetName())
+				return func
+			end
+		end
+	end
+
+	-- unique id
+	local ply = player.GetByUniqueID(str)
+	if ply and ply:IsPlayer() then
+		return ply
+	end
+
+	-- steam id
+	if str:find("STEAM") then
+		for key, _ply in pairs(player.GetAll()) do
+			if _ply:SteamID() == str then
+				return _ply
+			end
+		end
+	end
+
+	if str:sub(1,1) == "_" and tonumber(str:sub(2)) then
+		str = str:sub(2)
+	end
+
+	if tonumber(str) then
+		ply = Entity(tonumber(str))
+		if ply:IsValid() then
+			return ply
+		end
+	end
+
+	-- ip
+	if SERVER then
+		if str:find("%d+%.%d+%.%d+%.%d+") then
+			for key, _ply in pairs(player.GetAll()) do
+				if _ply:IPAddress():find(str) then
+					return _ply
+				end
+			end
+		end
+	end
+	-- search in sensible order
+	
+	-- search exact
+	for _,ply in pairs(player.GetAll()) do
+		if ply:Nick()==str then
+			return ply
+		end
+	end
+	
+	-- Search bots so we target those first
+	for key, ply in pairs(player.GetBots()) do
+		if comparenick(ply:Nick(), str) then
+			return ply
+		end
+	end
+	
+	-- search from beginning of nick
+	for _,ply in pairs(player.GetHumans()) do
+		if ply:Nick():lower():find(str,1,true)==1 then
+			return ply
+		end
+	end
+	
+	-- Search normally and search with colorcode stripped
+	for key, ply in pairs(player.GetAll()) do
+		if comparenick(ply:Nick(), str) then
+			return ply
+		end
+		if comparenick(ply:Nick():gsub("%^%d", ""), str) then
+			return ply
+		end
+	end
+
+	for key, ent in pairs(ents.GetAll()) do
+		if compareentity(ent, str) then
+			return ent
+		end
+	end
+
+	do -- class
+
+		local _str, idx = str:match("(.-)(%d+)")
+		if idx then
+			idx = tonumber(idx)
+			str = _str
+		else
+			str = str
+			idx = (me and me.easylua_iterator) or 0
+		end
+
+		local found = {}
+
+		for key, ent in pairs(ents.GetAll()) do
+			if compare(ent:GetClass(), str) then
+				table.insert(found, ent)
+			end
+		end
+
+		return found[math.Clamp(idx%#found, 1, #found)] or NULL
+	end
+end
+
 -- Update upvalues on receiving end
 function Environment.UpdateUpvals(context)
     local vars = context.Upvalues
@@ -120,6 +305,8 @@ function Environment.UpdateUpvals(context)
             end
         end
     end
+    vars.E = Environment.FindEntity
+    vars.__ENV = vars
     vars.__CONTEXT = context
 end
 
@@ -136,6 +323,10 @@ function Environment.CreateContext(runner, transferId, vars)
     ContextTable.RunnerSteamID = runner:SteamID()
     ContextTable.IsloateGlobal = vars.__ISOLATE_GLOBALS or false
     ContextTable.Upvalues = vars or {}
+    local nils={
+		["CLIENT"]=true,
+		["SERVER"]=true,
+	}
     ContextTable.META = {
         __index = function(self, key)
             local var = rawget(self, key)
@@ -144,6 +335,14 @@ function Environment.CreateContext(runner, transferId, vars)
             if upval ~= nil then return upval end
             local gvar = _G[key]
             if gvar ~= nil then return gvar end
+            if not nils [key] then -- uh oh
+                var = easylua.FindEntity(key)
+                if var:IsValid() then
+                    return var
+                end
+            end
+
+            return nil
         end,
         __newindex = function(self, key, value)
             if ContextTable.IsloateGlobal then
@@ -187,6 +386,15 @@ concommand.Add("noir_clearenvs", function(ply)
             cleared = cleared + #Environment.Contexts[k]
             Environment.Contexts[k] = nil
         end
+    end
+    Noir.Msg("Cleared ", Color(0,150, 0), tostring(cleared), Color(255,255,255), " envs.")
+end, nil, "Clears unused Noir environments")
+
+concommand.Add("noir_clearenvs_all", function(ply)
+    if SERVER and IsValid(ply) and not ply:IsSuperAdmin() then return end
+    local cleared = 0
+    for k, v in pairs(Environment.Contexts) do
+        Environment.Contexts[k] = {}
     end
     Noir.Msg("Cleared ", Color(0,150, 0), tostring(cleared), Color(255,255,255), " envs.")
 end, nil, "Clears unused Noir environments")

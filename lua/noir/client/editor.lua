@@ -3,6 +3,7 @@ Noir.Editor = Editor
 Editor.IsReady = false
 
 function Editor.Show()
+    if coh then coh.StartChat() end
     if IsValid(Editor.Frame) then
         Editor.Frame:Show()
         Editor.Frame:MakePopup()
@@ -78,6 +79,7 @@ function Editor.CreateFrame()
         Editor.SaveConfig()
         Editor.QueueSessionsSave()
         CloseDermaMenus()
+        if coh then coh.FinishChat() end
     end
 
     local oMousePressed = frame.OnMousePressed
@@ -393,6 +395,8 @@ function Editor.CreateFrame()
                 end
             end, "Mod.Alt | Key.KEY_" .. i)
         end
+
+        monaco:AddAction("showRepl", "Noir: Show console window",Noir.ShowRepl, "Mod.CtrlCmd | Mod.Shift | Key.KEY_C")
         -- TODO: SpiralP asked for "Search in lua files" feature
         --      Not sure how im going to implement
         --      Maybe create a separte window with the results?
@@ -419,6 +423,7 @@ function Editor.CreateFrame()
         Editor.ActiveSession.code = code
         Editor.ActiveSession.Modified = modified
         Editor.UpdateSession(Editor.ActiveSession.name, true)
+        Editor.UpdateCOH()
     end
 
     monaco.HTMLPanel.OnFocusChanged = function(_, hasFocus)
@@ -428,6 +433,10 @@ function Editor.CreateFrame()
 
     monaco.OnOpenURL = function(_, url)
         gui.OpenURL(url)
+    end
+
+    monaco.OnValidation = function ()
+        Editor.UpdateCOH()
     end
 
     frame.OnFocusChanged = function(_, hasFocus)
@@ -510,6 +519,19 @@ function Editor.AddTab(session)
     pnl.OnMousePressed = function(_, keyCode)
         if keyCode == MOUSE_LEFT then
             Editor.SetActiveTab(session.name)
+            if pnl.LastLeftClick and (CurTime() - pnl.LastLeftClick) < 0.5 then
+                Derma_StringRequest("Rename", "Enter a new name", session.name, function(newName)
+                    if Editor.SessionsByName[newName] then
+                        Derma_Message("Error", "Cant rename to `" .. newName .. "`, name already taken", "Ok"):SetSkin("Noir")
+        
+                        return
+                    end
+        
+                    Editor.RenameSession(session.name, newName)
+                end):SetSkin("Noir")
+                return
+            end
+            pnl.LastLeftClick = CurTime()
         elseif keyCode == MOUSE_RIGHT then
             if Editor.tabMenu:IsVisible() then
                 Editor.tabMenu:Hide()
@@ -756,6 +778,29 @@ function Editor.RunCode(target)
             end
         end
     end, id, "run")
+    if Noir.ReplFrame and Noir.ReplFrame.Repl then
+        Noir.Environment.RegisterHandler(function(sender, transferId, message, data)
+            local done, returns = unpack(util.JSONToTable(data) or {})
+            if message == "run" and done and returns == "nil" then return end
+            local displayname = Format("%s[%s]",Editor.ActiveSession.name, table.concat({string.match( id, "(%x%x)%x+(%x%x)$" )}, ".."))
+            if targets ~= 1 then
+                displayname = displayname .. "-" .. (sender == Entity(0) and "SERVER" or tostring(sender))
+            end
+            local succ, err = pcall(
+                Noir.ReplFrame.Repl.OnMessage,
+                Noir.ReplFrame.Repl,
+                target,
+                displayname,
+                sender,
+                transferId,
+                message,
+                data
+            )
+            if not succ then
+                Noir.ReplFrame.Repl:AddText(Format("--[[%s: Could not display output]] %s", identifier, err))
+            end
+        end, id)
+    end
     Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, target, id)
 end
 
@@ -889,6 +934,7 @@ end
 
 function Editor.QueueSessionsSave()
     Editor.MonacoPanel.OnSessions = function(_, sessions)
+        Editor.UpdateCOH()
         Editor.SaveJSSessions(sessions)
     end
 
@@ -986,6 +1032,30 @@ function Editor.SaveSessions()
     file.Write("noirSessions.json", util.TableToJSON(Editor.Sessions, Noir.DEBUG))
 end
 
+function Editor.UpdateCOH()
+    if not coh  or not Editor.ActiveSession then return end
+    local cohText = Format(
+        "%d Tab(s) - Current: %s\n%d line(s)",
+        #Editor.Sessions,
+        Editor.ActiveSession.name,
+        #string.Split(Editor.ActiveSession.code, "\n")
+    )
+    if Editor.MonacoPanel and Editor.MonacoPanel.LastReport then
+        if Editor.MonacoPanel.LastReport.errors ~= 0 then
+            cohText = cohText .. "; Contains errors :c"
+        else
+            cohText = cohText .. Format("; %d warning(s)", Editor.MonacoPanel.LastReport.warnings)
+        end
+    end
+    local maxLineLen = 0
+    for _, line in pairs(string.Split(cohText, "\n")) do
+        maxLineLen = math.max(maxLineLen, string.len(line))
+    end
+    local indentSize = math.ceil(maxLineLen / 2)
+    cohText = string.rep(" ", indentSize) .. "[Noir Editor]" .. string.rep(" ", indentSize) .. "\n" .. cohText
+    coh.SendTypedMessage(cohText)
+end
+
 concommand.Add("noir_clearconfig", function()
     Editor.Config = {}
     Editor.Sessions = {}
@@ -1003,4 +1073,18 @@ end)
 
 concommand.Add("noir_showeditor", function(ply, cmd, args)
     Editor.Show()
+end)
+
+hook.Add("Think", "NoirEditorClose", function(self)
+    if not input.IsKeyDown(KEY_ESCAPE) then return end
+    if Noir.Editor.Frame and Noir.Editor.Frame:IsVisible() then
+        Noir.Editor.Frame:Hide()
+        if coh then coh.FinishChat() end
+        gui.HideGameUI()
+    end
+    if Noir.ReplFrame and Noir.ReplFrame:IsVisible() then
+        Noir.ReplFrame:Hide()
+        if coh then coh.FinishChat() end
+        gui.HideGameUI()
+    end
 end)

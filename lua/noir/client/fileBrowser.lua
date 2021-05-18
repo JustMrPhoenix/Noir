@@ -305,7 +305,7 @@ function PANEL:Think()
             tb.line:SetColumnText(4, size ~= 0 and string.NiceSize(size) or "N/A")
         end
 
-        if time <= 1 then
+        if size == 0 then
             tb.line.Columns[1]:SetImage(tb.isFolder and "icon16/folder_error.png" or "icon16/page_error.png")
         end
     end
@@ -384,7 +384,7 @@ function PANEL:SetPath(path, folder)
     local pathNode = self.Tree:AddNode(path)
     pathNode:MakeFolder("", path)
     pathNode:SetExpanded(true)
-    self.TreeNodes = pathNode.ChildNodes:GetChildren()
+    self.TreeNodes = pathNode.ChildNodes:GetChildren() or {}
     self:OpenFolder(folder)
 end
 

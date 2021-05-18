@@ -230,4 +230,9 @@ function SKIN:PaintComboBox(panel, w, h)
     surface.DrawRect(0, 0, w, h)
 end
 
+function SKIN:PaintTooltip( panel, w, h )
+    surface.SetDrawColor(63, 63, 63)
+    surface.DrawRect(0, 0, w, h)
+end
+
 derma.DefineSkin("Noir", "Noir editor skin", SKIN)

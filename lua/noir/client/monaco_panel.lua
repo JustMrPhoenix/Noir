@@ -1,5 +1,5 @@
 local PANEL = {}
--- Since gmod does not allow you to open localhost urls im using totallynotme.hack that points to 127.0.0.1
+-- Since gmod does not allow you to open localhost urls im using loopback.bestboy.moe that points to 127.0.0.1
 PANEL.URL = Noir.DEBUG and "http://loopback.bestboy.moe:8080" or "https://metastruct.github.io/gmod-monaco/"
 PANEL.SHOULD_VALIDATE = true
 PANEL.VALIDATE_COOLDOWN = 0.5
@@ -8,7 +8,7 @@ PANEL.CUSTOM_JS = [[console.debug("Commiting keybind HACKS")
 let keybind = editor._standaloneKeybindingService._getResolver()._lookupMap.get("editor.action.quickCommand")[0].resolvedKeybinding._parts[0]
 keybind.ctrlKey = true;
 keybind.shiftKey = true;
-keybind.keyCode = monaco.KeyCode.KEY_P;
+keybind.keyCode = 46; //monaco.KeyCode.KEY_P
 editor._standaloneKeybindingService.updateResolver();]]
 
 local function addColumn(listView, name)
@@ -112,9 +112,6 @@ function PANEL:ValidateCode()
         return luacheck.filter.filter({ report })
     end)
     local events = succ and ret[1] or {}
-    if self.OnValidation then
-        self:OnValidation(succ, events)
-    end
     Noir.Debug("Validation", succ, events)
     if succ and #events > 0 then
         if #events == 1 and tostring(events[1].code)[1] == "0" then
@@ -125,6 +122,10 @@ function PANEL:ValidateCode()
     elseif succ and #events == 0 then
         self:SetStatus("Validated. No issues", Color(0, 150, 0), true)
     end
+    local reportInfo = {
+        errors = 0,
+        warnings = 0
+    }
     if succ then
         local luaReportEvents = {}
         self.ErrorList:Clear()
@@ -133,6 +134,11 @@ function PANEL:ValidateCode()
             local code = tostring(event.code)
             local isError = code[1] == "0"
             local message = luacheck.get_message(event)
+            if isError then
+                reportInfo.errors = reportInfo.errors + 1
+            else
+                reportInfo.warnings = reportInfo.warnings + 1
+            end
             local reportEvent =  {
                 message = message,
                 isError = isError,
@@ -148,9 +154,14 @@ function PANEL:ValidateCode()
             local line = self.ErrorList:AddLine(icon, message, code, event.line)
             line.event = reportEvent
         end
+        reportInfo.events = luaReportEvents
+        self.LastReport = reportInfo
         self:SubmitLuaReport(luaReportEvents)
     else
         self:SubmitLuaReport({})
+    end
+    if self.OnValidation then
+        self:OnValidation(succ, reportInfo)
     end
 end
 

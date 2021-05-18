@@ -114,6 +114,8 @@ function PANEL:RequestFocus()
 end
 
 function PANEL:SetStatus(text, color, prependTime)
+    self.status = text
+    PANEL:UpdateCOH()
     self.StatusButton:SetText((prependTime and Format("[%s] ", os.date("%H:%M:%S")) or "") .. text)
     self.StatusButton.BackgroundColor = color or self.StatusButton.BackgroundColor
 end
@@ -190,8 +192,13 @@ function PANEL:OnCode(code)
         if not succ then
             self:AddText(Format("--[[%s: Could not display output]] %s", identifier, err))
         end
-    end , id)
-    Noir.SendCode(code, identifier, self.Target, id)
+    end, id)
+    local succ, err = pcall(Noir.SendCode, code, identifier, self.Target, id)
+    if not succ then
+        self:SetStatus(Format("Error: %s", err), Color(150, 0, 0), true)
+        self:AddText(Format("--[[Could not run code: %s]]", err))
+    end
+    self:UpdateCOH()
 end
 
 function PANEL:OnRunResult(identifier, sender, transferId, results)
@@ -215,6 +222,7 @@ function PANEL:OnRunResult(identifier, sender, transferId, results)
             self:SetStatus(Format("Ran on %s successfully", senderName), Color(0, 150, 0), true)
         end
     end
+    self:UpdateCOH()
 end
 
 function PANEL:OnMessage(target, replName, sender, transferId, message, messageBody)
@@ -278,6 +286,22 @@ function PANEL:SetupHTML()
     self:AddJSCallback("OnCode")
 end
 
+function PANEL:UpdateCOH()
+    if not coh then return end
+    local cohText = Format(
+        "%d repls so far\n%s",
+        self.ReplCounter or 0,
+        self.status or "Status uknown"
+    )
+    local maxLineLen = 0
+    for _, line in pairs(string.Split(cohText, "\n")) do
+        maxLineLen = math.max(maxLineLen, string.len(line))
+    end
+    local indentSize = math.ceil(maxLineLen / 2)
+    cohText = string.rep(" ", indentSize) .. "[Noir Console]" .. string.rep(" ", indentSize) .. "\n" .. cohText
+    coh.SendTypedMessage(cohText)
+end
+
 function Noir.CreateRepl()
     local frame = vgui.Create("DFrame")
     Noir.ReplFrame = frame
@@ -292,12 +316,16 @@ function Noir.CreateRepl()
     frame.btnMinim:SetVisible(false)
     frame.btnMaxim:SetVisible(false)
     frame:SetDeleteOnClose(false)
+    frame.OnClose = function ()
+        if coh then coh.FinishChat() end
+    end
 
     local repl = vgui.CreateFromTable(PANEL, frame)
     frame.Repl = repl
     repl:DockMargin(-4, -4, -4, -4)
     repl:Dock(FILL)
     repl:SetCursor("sizenwse")
+    repl:UpdateCOH()
 
     repl.OnMousePressed = function(_, ...)
         if frame.Maximized then return end
@@ -311,6 +339,7 @@ function Noir.CreateRepl()
 end
 
 function Noir.ShowRepl()
+    if coh then coh.StartChat() end
     if IsValid(Noir.ReplFrame) then
         Noir.ReplFrame:Show()
         Noir.ReplFrame:MakePopup()
@@ -320,12 +349,12 @@ function Noir.ShowRepl()
     Noir.CreateRepl()
 end
 
-if Noir.DEBUG then
-    if IsValid(Noir.ReplFrame) then
-        Noir.ReplFrame:Remove()
-    end
-    Noir.ShowRepl()
-end
+-- if Noir.DEBUG then
+--     if IsValid(Noir.ReplFrame) then
+--         Noir.ReplFrame:Remove()
+--     end
+--     Noir.ShowRepl()
+-- end
 
 concommand.Add("noir_showrepl", function(ply, cmd, args)
     Noir.ShowRepl()

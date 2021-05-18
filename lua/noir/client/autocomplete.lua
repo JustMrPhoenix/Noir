@@ -5,6 +5,7 @@ function Autocomplete.GetValuesAndFuncs(tbl, name, scannedTbls, depth)
     scannedTbls = scannedTbls or {}
     depth = depth or 3
     local values, functions = {}, {}
+    local tableScanQueue = {}
 
     for k, v in pairs(tbl) do
         -- nolint
@@ -16,14 +17,18 @@ function Autocomplete.GetValuesAndFuncs(tbl, name, scannedTbls, depth)
         if isfunction(v) then
             table.insert(functions, fullname)
         elseif istable(v) then
-            if scannedTbls[v] or depth == 1 then continue end
+            if scannedTbls[v] or depth == 0 then continue end
             scannedTbls[v] = true
-            local vals, funcs = Autocomplete.GetValuesAndFuncs(v, fullname, scannedTbls, depth - 1)
-            table.Add(values, vals)
-            table.Add(functions, funcs)
+            tableScanQueue[fullname] = v
         else
             table.insert(values, fullname)
         end
+    end
+
+    for fullname, tbl in pairs(tableScanQueue) do
+        local vals, funcs = Autocomplete.GetValuesAndFuncs(tbl, fullname, scannedTbls, depth - 1)
+        table.Add(values, vals)
+        table.Add(functions, funcs)
     end
 
     return values, functions
@@ -68,10 +73,10 @@ concommand.Add("noir_reload_autocomplete", function()
     Noir.Debug(Format("Found %i values and %i functions for editor autocomplete", #values, #funcs))
     values, funcs = table.concat(values, "|"), table.concat(funcs, "|")
     if IsValid(Noir.Editor.Frame) and Noir.Editor.MonacoPanel.Ready then
-        Noir.Editor.MonacoPanel:RunJS([[gmodinterface.LoadAutocomplete({values: "%s", funcs: "%s"})]], interfaceName, values, funcs)
+        Noir.Editor.MonacoPanel:RunJS([[gmodinterface.LoadAutocomplete({values: "%s", funcs: "%s"})]], values, funcs)
     end
 
     if IsValid(Noir.ReplFrame) and Noir.ReplFrame.Repl.Ready then
-        Noir.ReplFrame.Repl:RunJS([[replinterface.LoadAutocomplete({values: "%s", funcs: "%s"})]], interfaceName, values, funcs)
+        Noir.ReplFrame.Repl:RunJS([[replinterface.LoadAutocomplete({values: "%s", funcs: "%s"})]], values, funcs)
     end
 end)
