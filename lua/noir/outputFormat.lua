@@ -65,7 +65,7 @@ local default_decomp_values = {
     "A", "B", "C", "D", "line", "OP_ENGLISH", "OP_ENGLISH", "OP_MODES", "OP_CODE", "OP_DOCUMENTATION"
 }
 
-function Format.DecompileFunc(func, level)
+function Format.DecompileFunc(func, level, doFull)
     local level = level or 0
     local data = jit.decompiler.functions.disassemble_function(func)
     local debugInfo = debug.getinfo(func)
@@ -94,9 +94,9 @@ function Format.DecompileFunc(func, level)
         "funtion(%s) -- %p\n%slocal upvals = %s\n%slocal cosnts = %s%s\n%send",
         args_str, func,
         levelIndent .. "    ",
-        Format.FormatLong(upvals, level+1),
+        Format.FormatLong(upvals, level+1, doFull),
         levelIndent .. "    ",
-        Format.FormatLong(data.consts, level+1),
+        Format.FormatLong(data.consts, level+1, doFull),
         insruction_string, levelIndent
     ), fmt("%s[%d-%d]", debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
 end
@@ -197,7 +197,7 @@ function Format.FormatLong( val, level, doFull, doneTbls )
                 local fileContent = file.Read(fullpath, "GAME")
                 local lines = string.Split(fileContent, "\n")
                 if debugInfo.lastlinedefined > #lines then 
-                    return fmt("%sfunc(%p)", levelIndent, val), info
+                    return Format.DecompileFunc( val, level, doFull )
                 end
                 local indent = "^"..string.match(lines[debugInfo.linedefined], "^%s*")
                 local result = string.gsub(lines[debugInfo.linedefined], indent, "")
@@ -210,7 +210,7 @@ function Format.FormatLong( val, level, doFull, doneTbls )
                     return string.Trim(result), info
                 end
             else
-                return Format.DecompileFunc( val, level )
+                return Format.DecompileFunc( val, level, doFull )
             end
         end
     elseif val and not istable(val) and isfunction(val.GetTable) then

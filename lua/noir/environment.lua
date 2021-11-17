@@ -335,7 +335,7 @@ function Environment.CreateContext(runner, transferId, vars)
             if upval ~= nil then return upval end
             local gvar = _G[key]
             if gvar ~= nil then return gvar end
-            if not nils [key] then -- uh oh
+            if not nils [key] and easylua ~= nil then -- uh oh
                 var = easylua.FindEntity(key)
                 if var:IsValid() then
                     return var

@@ -60,11 +60,11 @@ local function loadModule(path)
         AddCSLuaFile(path)
     end
 
-    if string.len(name) > 15 then
-        name = string.Left(name, 12) .. "..."
+    if string.len(name) > 17 then
+        name = string.Left(name, 13) .. "..."
     end
 
-    local str = Format("| [%s] MODULE: %s%s |", state, name, string.rep(" ", 15 - name:len()))
+    local str = Format("| [%s] MODULE: %-17s |", state, name)
     print(str)
     if state == "CL" and SERVER then return end
     include(path)
@@ -79,10 +79,10 @@ function Noir.Load()
 
     require("luacheck")
 
-    print("+------------------------------+")
-    print("|            -Noir-            |")
-    print("+------------------------------+")
-    print("|                              |")
+    print("+--------------------------------+")
+    print("|             -Noir-             |")
+    print("+--------------------------------+")
+    print("|                                |")
     loadModule("logging.lua")
     loadModule("utils.lua")
     loadModule("network.lua")
@@ -95,8 +95,10 @@ function Noir.Load()
     loadModule("client/monaco_panel.lua")
     loadModule("client/editor.lua")
     loadModule("client/repl.lua")
-    print("|                              |")
-    print("+-------Loading complete-------+")
+    loadModule("ndl/load.lua")
+    NDL.load()
+    print("|                                |")
+    print("+--------Loading complete--------+")
     Noir.Msg("Loaded!\n")
 end
 
@@ -105,6 +107,7 @@ if SERVER then
     for _,filename in ipairs(file.Find("lua/includes/modules/luacheck*", "GAME")) do
         AddCSLuaFile("includes/modules/" .. filename)
     end
+    AddCSLuaFile("includes/modules/jit_decompiler.lua")
 end
 
 Noir.Load()
