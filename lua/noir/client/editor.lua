@@ -375,6 +375,9 @@ function Editor.CreateFrame()
         monaco:AddAction("runOnServer", "Lua: Run on server", function() Editor.RunCode("server") end)
         monaco:AddAction("runOnShared", "Lua: Run on shared", function() Editor.RunCode("shared") end)
         monaco:AddAction("runOnClients", "Lua: Run on clients", function() Editor.RunCode("clients") end)
+        
+        monaco:AddAction("quickRun", "Lua: Run on last target", function() Editor.RunCode(Editor.LastRunTarget or "self") end, "Mod.CtrlCmd | Key.KEY_E")
+        
         monaco:AddAction("cycleTabs", "Cycle tabs", function()
             local currentTab
             for k, v in pairs(Editor.Sessions) do
@@ -740,6 +743,7 @@ function Editor.GetLanguageFromFilename(fileName)
 end
 
 function Editor.RunCode(target)
+    Editor.LastRunTarget = target
     Editor.QueueSessionsSave()
     local targets
     if target == "clients" then

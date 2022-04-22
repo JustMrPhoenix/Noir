@@ -13,7 +13,10 @@ function Autocomplete.GetValuesAndFuncs(tbl, name, scannedTbls, depth)
         if k[1] == "_" then continue end
         if not Noir.Utils.IsSafeKey(k) then continue end
         local fullname = name and name .. "." .. k or k
-
+        
+        if string.Trim(k) == "" then
+            continue
+        end
         if isfunction(v) then
             table.insert(functions, fullname)
         elseif istable(v) then
@@ -38,9 +41,15 @@ function Autocomplete.GetAllClassfuncs()
     local classFucs = {}
 
     for k, v in pairs(debug.getregistry()) do
+        if string.Trim(k) == "" then
+            continue
+        end
         -- Make sure its an actual object and not just some _LOADED stuff
         if isstring(k) and istable(v) and (v.MetaID or v.MetaName or v.__tostring) then
             for key, val in pairs(v) do
+                if string.Trim(key) == "" then
+                    continue
+                end
                 if isstring(key) and isfunction(val) and not key:StartWith("__") and Noir.Utils.IsSafeKey(key) then
                     table.insert(classFucs, k .. ":" .. key)
                 end
