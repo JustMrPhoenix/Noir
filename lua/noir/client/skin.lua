@@ -8,6 +8,7 @@ SKIN.Colours.Button.Disabled = Color(100, 100, 100)
 SKIN.Colours.Button.Hover = SKIN.Colours.Button.Normal
 SKIN.Colours.Button.Down = SKIN.Colours.Button.Normal
 SKIN.Colours.Label = {}
+SKIN.Colours.Label.Default = Color(150, 150, 150)
 SKIN.Colours.Label.Bright = Color(30, 30, 30) -- Bright and dark are inverted here
 SKIN.Colours.Label.Dark = Color(200, 200, 200)
 SKIN.Colours.Label.Highlight = Color(255, 0, 0)

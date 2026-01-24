@@ -302,6 +302,7 @@ function PANEL:Think()
 
         if not tb.isFolder then
             local size = file.Size(tb.fullpath, self.Path)
+            if size == nil then size = 0 end
             tb.line:SetColumnText(4, size ~= 0 and string.NiceSize(size) or "N/A")
         end
 
