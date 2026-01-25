@@ -66,39 +66,45 @@ local default_decomp_values = {
 }
 
 function Format.DecompileFunc(func, level, doFull)
-    local level = level or 0
-    local data = jit.decompiler.functions.disassemble_function(func)
-    local debugInfo = debug.getinfo(func)
-    local insruction_string = ""
-    local levelIndent = string.rep("    ", level)
-    for i, instruction in pairs(data.instructions) do
-        local insturctions_copy = table.Copy(instruction)
-        insruction_string = insruction_string .. fmt("\n%s    %-3d: %-6s -- %s -- ", levelIndent, i, instruction.OP_ENGLISH, instruction.OP_DOCUMENTATION)
-        for _, val in pairs(default_decomp_values) do
-            insturctions_copy[val] = nil
-        end
-        insruction_string = insruction_string .. keyValFormat(insturctions_copy)
-    end
+    -- Crashes for me. Disable for now
+    return fmt("function(...) -- %p\n%s-- decompiled function not available\n%send",
+        "...", func,
+        string.rep("    ", level or 0),
+        string.rep("    ", level or 0)
+    ), "decompiled function not available"
+    -- local level = level or 0
+    -- local data = jit.decompiler.functions.disassemble_function(func)
+    -- local debugInfo = debug.getinfo(func)
+    -- local insruction_string = ""
+    -- local levelIndent = string.rep("    ", level)
+    -- for i, instruction in pairs(data.instructions) do
+    --     local insturctions_copy = table.Copy(instruction)
+    --     insruction_string = insruction_string .. fmt("\n%s    %-3d: %-6s -- %s -- ", levelIndent, i, instruction.OP_ENGLISH, instruction.OP_DOCUMENTATION)
+    --     for _, val in pairs(default_decomp_values) do
+    --         insturctions_copy[val] = nil
+    --     end
+    --     insruction_string = insruction_string .. keyValFormat(insturctions_copy)
+    -- end
 
-    local args_str
-    if debugInfo.isvararg then
-        args_str = "..."
-    else
-        local _, args = getlocals(func)
-        args_str = table.concat(args, ",")
-    end
+    -- local args_str
+    -- if debugInfo.isvararg then
+    --     args_str = "..."
+    -- else
+    --     local _, args = getlocals(func)
+    --     args_str = table.concat(args, ",")
+    -- end
 
-    local upvals = getupvalues(func)
+    -- local upvals = getupvalues(func)
 
-    return fmt(
-        "funtion(%s) -- %p\n%slocal upvals = %s\n%slocal cosnts = %s%s\n%send",
-        args_str, func,
-        levelIndent .. "    ",
-        Format.FormatLong(upvals, level+1, doFull),
-        levelIndent .. "    ",
-        Format.FormatLong(data.consts, level+1, doFull),
-        insruction_string, levelIndent
-    ), fmt("%s[%d-%d]", debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
+    -- return fmt(
+    --     "funtion(%s) -- %p\n%slocal upvals = %s\n%slocal cosnts = %s%s\n%send",
+    --     args_str, func,
+    --     levelIndent .. "    ",
+    --     Format.FormatLong(upvals, level+1, doFull),
+    --     levelIndent .. "    ",
+    --     Format.FormatLong(data.consts, level+1, doFull),
+    --     insruction_string, levelIndent
+    -- ), fmt("%s[%d-%d]", debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
 end
 
 function Format.FormatShort( val )
