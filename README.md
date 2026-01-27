@@ -1,7 +1,9 @@
+# ARCHIVED
+
+This project is no longer maintaned, there are better alternatives out there that use VSCode
+
 Noir: In-Game Lua Editor
 ========================
-
-# WIP
 
 Noir uses [gmod-monaco](https://github.com/Metastruct/gmod-monaco) and therefore requires chromium to run
 
