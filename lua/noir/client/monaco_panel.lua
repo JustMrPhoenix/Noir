@@ -5,10 +5,10 @@ PANEL.SHOULD_VALIDATE = true
 PANEL.VALIDATE_COOLDOWN = 0.5
 -- Totally hacky way to rebind command palette to Ctrl+Shift+P like in vs-code
 PANEL.CUSTOM_JS = [[console.debug("Commiting keybind HACKS")
-let keybind = editor._standaloneKeybindingService._getResolver()._lookupMap.get("editor.action.quickCommand")[0].resolvedKeybinding._parts[0]
+let keybind = editor._standaloneKeybindingService._getResolver()._lookupMap.get("editor.action.quickCommand")[0].resolvedKeybinding._chords[0];
 keybind.ctrlKey = true;
 keybind.shiftKey = true;
-keybind.keyCode = 46; //monaco.KeyCode.KEY_P
+keybind.keyCode = 46; //monaco.KeyCode.KeyP
 editor._standaloneKeybindingService.updateResolver();]]
 
 local function addColumn(listView, name)

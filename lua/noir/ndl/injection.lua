@@ -4,7 +4,7 @@ NDL.injections = NDL.injections or {}
 NDL.originalFuncs = NDL.originalFuncs or {}
 NDL.traces = NDL.traces or {}
 
--- Detour funcs sohuld return true to prevent the original function from running
+-- Detour funcs should return true to prevent the original function from running
 function NDL.MakeDetour(originalFunc, detourFunc)
 	return function(...)
 		local succ, res = NDL.PCall(detourFunc,...)
@@ -23,13 +23,13 @@ function NDL.MakeDetour(originalFunc, detourFunc)
 end
 
 
--- FilterFuncs should return true, the table of arguments to pass to the origianl function
+-- FilterFuncs should return true, the table of arguments to pass to the original function
 function NDL.MakeArgsFilter(originalFunc, filterFunc)
 	return function(...)
 		local succ, res = NDL.PCall(filterFunc,...)
 		if succ then
-			local toFillter = table.remove(res, 1)
-			if toFillter == true then
+			local toFilter = table.remove(res, 1)
+			if toFilter == true then
 				return originalFunc(unpack(res))
 			else
 				return originalFunc(...)
@@ -161,5 +161,5 @@ function NDL.TraceOneCall(targetTbl,funcName,name)
 	end ))
 end
 
--- Condommand to restore all funcs if case of big bork
+-- Concommand to restore all funcs in case of big bork
 concommand.Add("ndl_restoreall", NDL.RestoreAllInjects)

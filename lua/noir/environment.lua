@@ -150,7 +150,7 @@ function Environment.FindEntity(str)
 			end
 
 			if found then
-				local func = CreateAllFuncton(function(v) return v:GetClass():lower() == class end)
+				local func = CreateAllFuncton(function(v) return v:GetClass():lower() == found end)
 				print(func:GetName())
 				return func
 			end

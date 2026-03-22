@@ -111,7 +111,7 @@ end
 function PANEL:UpdateRunOnSubmenu()
 	self.RunOnSubmenu:Clear()
 	for _, v in pairs(player.GetHumans()) do
-		self:AddRunOption(v:Nick(), v, v:IsSuperAdmin() and "icon16/user_suit.png" or "icon16/user.png", runOnSubmenu)
+		self:AddRunOption(v:Nick(), v, v:IsSuperAdmin() and "icon16/user_suit.png" or "icon16/user.png", self.RunOnSubmenu)
 	end
 end
 
@@ -164,6 +164,11 @@ function PANEL:JS_OnReady()
 
 	self.StatusButton.DoClick = function() end
 
+	-- Request focus now that the HTML panel is ready
+	if self:IsVisible() then
+		self:RequestFocus()
+	end
+
 	if self.OnReady then
 		self:OnReady()
 	end
@@ -215,7 +220,7 @@ function PANEL:OnRunResult(identifier, sender, transferId, results)
 	if not done then
 		self.hasError = true
 		local msg = Noir.Utils.ParseLuaError(returns, identifier)
-		Noir.Debug("Repl.Error", msg, line, returns)
+		Noir.Debug("Repl.Error", msg, returns)
 		if CLIENT and sender == LocalPlayer() then
 			self:SetStatus(Format("Error:%s", msg or returns), Color(150, 0, 0), true)
 		else
@@ -223,7 +228,7 @@ function PANEL:OnRunResult(identifier, sender, transferId, results)
 		end
 	elseif not self.hasError then
 		if self.targets ~= 1 then
-			self:SetStatus(Format("[%i/%i] Ran on %s successfully",  totalRan, self.targets, senderName), Color(0, 150, 0), true)
+			self:SetStatus(Format("[%i/%i] Ran on %s successfully",  self.totalRan, self.targets, senderName), Color(0, 150, 0), true)
 		else
 			self:SetStatus(Format("Ran on %s successfully", senderName), Color(0, 150, 0), true)
 		end

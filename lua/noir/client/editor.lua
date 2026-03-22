@@ -6,6 +6,7 @@ Editor.SessionsByName = Editor.SessionsByName or {}
 Editor.ConsoleSessions = {}  -- Track all console sessions
 Editor.MainConsole = nil     -- The main console that receives all script output
 Editor.ConsoleCounter = 0    -- Counter for naming new consoles
+Editor.PendingOnReady = {}   -- Actions queued until editor is ready
 
 -- Toggle between Monaco editor and REPL panel based on session type
 function Editor.SetContentPanel(sessionType)
@@ -96,6 +97,11 @@ end
 
 -- Show the main console tab (create if needed)
 function Editor.ShowMainConsole()
+	-- Queue if editor isn't ready yet (takes a moment to initialize)
+	if not Editor.IsReady then
+		table.insert(Editor.PendingOnReady, Editor.ShowMainConsole)
+		return
+	end
 	if not Editor.MainConsole then
 		Editor.CreateConsoleTab("Main Console", true)
 	end
@@ -691,6 +697,12 @@ function Editor.CreateFrame()
 
 		Editor.IsReady = true
 
+		-- Execute any actions that were queued while waiting for ready
+		for _, fn in ipairs(Editor.PendingOnReady) do
+			fn()
+		end
+		Editor.PendingOnReady = {}
+
 		-- Validate activeSession exists
 		local activeSession = Editor.Config.activeSession
 		if not activeSession or not Editor.SessionsByName[activeSession] then
@@ -712,27 +724,29 @@ function Editor.CreateFrame()
 		-- monaco:CloseSession("Unnamed")
 
 		-- monaco:AddAction(id, label, callback, keyBindings)
-		monaco:AddAction("fileNew", "File: New File", function() Editor.CreateSession() end, "Mod.CtrlCmd | Key.KEY_N")
-		monaco:AddAction("fileOpen", "File: Open File...", function() Noir.FileBrowser.Open(true) end, "Mod.CtrlCmd | Key.KEY_O")
-		monaco:AddAction("fileSave", "File: Save", function() Editor.Save() end, "Mod.CtrlCmd | Key.KEY_S")
-		monaco:AddAction("fileSaveAs", "File: Save As...", function() Editor.SaveAs() end, "Mod.CtrlCmd | Mod.Shift | Key.KEY_S")
+		monaco:AddAction("fileNew", "File: New File", function() Editor.CreateSession() end, "Mod.CtrlCmd | Key.KeyN")
+		monaco:AddAction("fileOpen", "File: Open File...", function() Noir.FileBrowser.Open(true) end, "Mod.CtrlCmd | Key.KeyO")
+		monaco:AddAction("fileSave", "File: Save", function() Editor.Save() end, "Mod.CtrlCmd | Key.KeyS")
+		monaco:AddAction("fileSaveAs", "File: Save As...", function() Editor.SaveAs() end, "Mod.CtrlCmd | Mod.Shift | Key.KeyS")
 
-		monaco:AddAction("sessionClose", "Close tab", function() Editor.CloseTab(Editor.ActiveSession.name) end, "Mod.CtrlCmd | Key.KEY_W")
+		monaco:AddAction("sessionClose", "Close tab", function() Editor.CloseTab(Editor.ActiveSession.name) end, "Mod.CtrlCmd | Key.KeyW")
 
 		monaco:AddAction("runOnSelf", "Lua: Run on self", function() Editor.RunCode("self") end)
 		monaco:AddAction("runOnServer", "Lua: Run on server", function() Editor.RunCode("server") end)
 		monaco:AddAction("runOnShared", "Lua: Run on shared", function() Editor.RunCode("shared") end)
 		monaco:AddAction("runOnClients", "Lua: Run on clients", function() Editor.RunCode("clients") end)
 
-		monaco:AddAction("quickRun", "Lua: Run on last target", function() Editor.RunCode(Editor.LastRunTarget or "self") end, "Mod.CtrlCmd | Key.KEY_E")
+		monaco:AddAction("quickRun", "Lua: Run on last target", function() Editor.RunCode(Editor.LastRunTarget or "self") end, "Mod.CtrlCmd | Key.KeyE")
 
 		monaco:AddAction("cycleTabs", "Cycle tabs", function()
 			local currentTab
-			for k, v in pairs(Editor.Sessions) do
+			for k, v in ipairs(Editor.Sessions) do
 				if v.name == Editor.Config.activeSession then
 					currentTab = k
+					break
 				end
 			end
+			if not currentTab then currentTab = 1 end
 			local nextTab = currentTab + 1
 			if nextTab > #Editor.Sessions then
 				nextTab = 1
@@ -744,10 +758,10 @@ function Editor.CreateFrame()
 				if Editor.Sessions[i] then
 					Editor.SetActiveTab(Editor.Sessions[i].name)
 				end
-			end, "Mod.Alt | Key.KEY_" .. i)
+			end, "Mod.Alt | Key.Digit" .. i)
 		end
 
-		monaco:AddAction("toggleConsole", "Noir: Toggle Console Tab", function() Editor.ToggleConsoleTab() end, "Mod.CtrlCmd | Mod.Shift | Key.KEY_C")
+		monaco:AddAction("toggleConsole", "Noir: Toggle Console Tab", function() Editor.ToggleConsoleTab() end, "Mod.CtrlCmd | Mod.Shift | Key.KeyC")
 		monaco:AddAction("runAutorun", "Noir: Run Autorun Scripts", function()
 			if Noir.Autorun then
 				Noir.Autorun.RunAll()
@@ -758,7 +772,7 @@ function Editor.CreateFrame()
 		end)
 		monaco:AddAction("openDashboard", "Noir: Open Dashboard", function()
 			Noir.Dashboard.Show()
-		end, "Mod.CtrlCmd | Mod.Shift | Key.KEY_D")
+		end, "Mod.CtrlCmd | Mod.Shift | Key.KeyD")
 		-- TODO: SpiralP asked for "Search in lua files" feature
 		--      Not sure how im going to implement
 		--      Maybe create a separte window with the results?
@@ -1199,6 +1213,8 @@ function Editor.RunCode(target)
 	local replPanel = Editor.GetMainConsolePanel()
 	if replPanel then
 		local sessionName = Editor.ActiveSession.name
+		local runStartTime = SysTime()
+		local hasFocused = false
 		Noir.Environment.RegisterHandler(function(sender, transferId, message, data)
 			local done, returns = unpack(util.JSONToTable(data) or {})
 			if message == "run" and done and returns == "nil" then return end
@@ -1219,8 +1235,11 @@ function Editor.RunCode(target)
 			if not succ then
 				replPanel:AddText(Format("--[[%s: Could not display output]] %s", displayname, err))
 			end
-			-- Focus main console tab when output is received
-			Editor.FocusMainConsole()
+			-- Only focus main console if output arrives immediately after running (within 1 second)
+			if not hasFocused and (SysTime() - runStartTime) < 1 then
+				hasFocused = true
+				Editor.FocusMainConsole()
+			end
 		end, id)
 	end
 	Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, target, id)

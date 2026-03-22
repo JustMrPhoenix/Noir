@@ -1,7 +1,3 @@
-# ARCHIVED
-
-This project is no longer maintaned, there are better alternatives out there that use VSCode
-
 Noir: In-Game Lua Editor
 ========================
 

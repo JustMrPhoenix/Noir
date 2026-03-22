@@ -10,6 +10,48 @@ Dashboard.RegistrationOrder = Dashboard.RegistrationOrder or 0
 Dashboard.Frame = nil
 Dashboard.PropertySheet = nil
 
+-- Handle metatable for registered dashboards
+local DashboardHandle = {}
+DashboardHandle.__index = DashboardHandle
+
+function DashboardHandle:Get(key)
+	return Dashboard.Get(self._tabName, key)
+end
+
+function DashboardHandle:Set(key, value, skipCallback)
+	return Dashboard.Set(self._tabName, key, value, skipCallback)
+end
+
+function DashboardHandle:OnChange(key, callback)
+	return Dashboard.OnChange(self._tabName, key, callback)
+end
+
+function DashboardHandle:Reset(key)
+	return Dashboard.ResetToDefault(self._tabName, key)
+end
+
+function DashboardHandle:ResetAll()
+	return Dashboard.ResetTab(self._tabName)
+end
+
+function DashboardHandle:Unregister()
+	return Dashboard.Unregister(self._tabName)
+end
+
+function DashboardHandle:GetName()
+	return self._tabName
+end
+
+function DashboardHandle:GetRegistration()
+	return Dashboard.Registrations[self._tabName]
+end
+
+local function CreateDashboardHandle(tabName)
+	local handle = setmetatable({}, DashboardHandle)
+	handle._tabName = tabName
+	return handle
+end
+
 local SAVE_FILE = Noir.STORAGE_PATH .. "dashboard.json"
 
 -- Type definitions with validators and renderers
@@ -88,6 +130,12 @@ Dashboard.Types = {
 			return true
 		end,
 		default = {}
+	},
+	vector = {
+		validate = function(val)
+			return isvector(val) or (istable(val) and val.x and val.y and val.z)
+		end,
+		default = Vector(0, 0, 0)
 	}
 }
 
@@ -175,7 +223,7 @@ function Dashboard.Register(tabName, settings, options)
 		Dashboard.RefreshTabs()
 	end
 
-	return true
+	return CreateDashboardHandle(tabName)
 end
 
 function Dashboard.Unregister(tabName)
@@ -317,6 +365,13 @@ function Dashboard.Save()
 				b = value.b,
 				a = value.a
 			}
+		elseif isvector(value) then
+			saveData[fullKey] = {
+				_type = "vector",
+				x = value.x,
+				y = value.y,
+				z = value.z
+			}
 		else
 			saveData[fullKey] = value
 		end
@@ -350,6 +405,8 @@ function Dashboard.Load()
 			continue
 		elseif istable(value) and value._type == "color" then
 			Dashboard.Values[fullKey] = Color(value.r, value.g, value.b, value.a)
+		elseif istable(value) and value._type == "vector" then
+			Dashboard.Values[fullKey] = Vector(value.x, value.y, value.z)
 		else
 			Dashboard.Values[fullKey] = value
 		end
@@ -718,6 +775,8 @@ function Dashboard.CreateSettingRow(parent, setting, tabName)
 		rowHeight = 30
 	elseif setting.type == "list" then
 		rowHeight = 150
+	elseif setting.type == "vector" then
+		rowHeight = 30
 	end
 
 	local row = vgui.Create("DPanel", parent)
@@ -1128,6 +1187,118 @@ function Dashboard.CreateControl(parent, setting, tabName)
 		end
 
 		return container
+
+	elseif setting.type == "vector" then
+		local container = vgui.Create("DPanel", parent)
+		container:SetPaintBackground(false)
+
+		local vec = isvector(currentValue) and currentValue or Vector(0, 0, 0)
+
+		-- X input
+		local xLabel = vgui.Create("DLabel", container)
+		xLabel:SetText("X:")
+		xLabel:SetTextColor(Color(200, 200, 200))
+		xLabel:Dock(LEFT)
+		xLabel:SetWide(15)
+
+		local xEntry = vgui.Create("DNumberWang", container)
+		xEntry:SetSkin("Noir")
+		xEntry:SetMin(-999999)
+		xEntry:SetMax(999999)
+		xEntry:SetDecimals(setting.decimals or 2)
+		xEntry:SetValue(vec.x)
+		xEntry:Dock(LEFT)
+		xEntry:SetWide(70)
+		xEntry:DockMargin(0, 0, 5, 0)
+
+		-- Y input
+		local yLabel = vgui.Create("DLabel", container)
+		yLabel:SetText("Y:")
+		yLabel:SetTextColor(Color(200, 200, 200))
+		yLabel:Dock(LEFT)
+		yLabel:SetWide(15)
+
+		local yEntry = vgui.Create("DNumberWang", container)
+		yEntry:SetSkin("Noir")
+		yEntry:SetMin(-999999)
+		yEntry:SetMax(999999)
+		yEntry:SetDecimals(setting.decimals or 2)
+		yEntry:SetValue(vec.y)
+		yEntry:Dock(LEFT)
+		yEntry:SetWide(70)
+		yEntry:DockMargin(0, 0, 5, 0)
+
+		-- Z input
+		local zLabel = vgui.Create("DLabel", container)
+		zLabel:SetText("Z:")
+		zLabel:SetTextColor(Color(200, 200, 200))
+		zLabel:Dock(LEFT)
+		zLabel:SetWide(15)
+
+		local zEntry = vgui.Create("DNumberWang", container)
+		zEntry:SetSkin("Noir")
+		zEntry:SetMin(-999999)
+		zEntry:SetMax(999999)
+		zEntry:SetDecimals(setting.decimals or 2)
+		zEntry:SetValue(vec.z)
+		zEntry:Dock(LEFT)
+		zEntry:SetWide(70)
+		zEntry:DockMargin(0, 0, 10, 0)
+
+		local function updateValue()
+			local newVec = Vector(xEntry:GetValue(), yEntry:GetValue(), zEntry:GetValue())
+			Dashboard.Set(tabName, setting.key, newVec)
+		end
+
+		xEntry.OnValueChanged = function() updateValue() end
+		yEntry.OnValueChanged = function() updateValue() end
+		zEntry.OnValueChanged = function() updateValue() end
+
+		local function setVector(newVec)
+			xEntry:SetValue(newVec.x)
+			yEntry:SetValue(newVec.y)
+			zEntry:SetValue(newVec.z)
+			updateValue()
+		end
+
+		-- Get player position button
+		local getPosBtn = vgui.Create("DButton", container)
+		getPosBtn:SetSkin("Noir")
+		getPosBtn:SetText("Get Pos")
+		getPosBtn:SetTooltip("Set to your current position")
+		getPosBtn:Dock(LEFT)
+		getPosBtn:SetWide(55)
+		getPosBtn:DockMargin(0, 3, 5, 3)
+		getPosBtn.BackgroundColor = Color(60, 60, 60)
+		getPosBtn.HoveredColor = Color(80, 80, 80)
+		getPosBtn.DoClick = function()
+			local ply = LocalPlayer()
+			if IsValid(ply) then
+				setVector(ply:GetPos())
+			end
+		end
+
+		-- Pick position from world button
+		local pickBtn = vgui.Create("DButton", container)
+		pickBtn:SetSkin("Noir")
+		pickBtn:SetText("Pick")
+		pickBtn:SetTooltip("Click a position in the world")
+		pickBtn:Dock(LEFT)
+		pickBtn:SetWide(40)
+		pickBtn:DockMargin(0, 3, 0, 3)
+		pickBtn.BackgroundColor = Color(17, 73, 113)
+		pickBtn.HoveredColor = Color(25, 100, 150)
+		pickBtn.DoClick = function()
+			Dashboard.Hide()
+			Dashboard.StartVectorPick(function(pos)
+				setVector(pos)
+				Dashboard.Show()
+			end, function()
+				Dashboard.Show()
+			end)
+		end
+
+		return container
 	end
 
 	return nil
@@ -1203,6 +1374,80 @@ function Dashboard.ShowListAddDialog(tabName, setting, refreshCallback)
 
 	addBtn.DoClick = doAdd
 	entry.OnEnter = doAdd
+end
+
+-- Vector pick mode
+Dashboard.VectorPickActive = false
+Dashboard.VectorPickCallback = nil
+Dashboard.VectorPickCancelCallback = nil
+
+function Dashboard.StartVectorPick(onSelect, onCancel)
+	Dashboard.VectorPickActive = true
+	Dashboard.VectorPickCallback = onSelect
+	Dashboard.VectorPickCancelCallback = onCancel
+
+	hook.Add("HUDPaint", "Noir.Dashboard.VectorPick", function()
+		if not Dashboard.VectorPickActive then return end
+
+		-- Draw crosshair hint
+		local scrW, scrH = ScrW(), ScrH()
+		draw.SimpleText("Attack to select position (Secondary attack or ESC to cancel)", "DermaDefaultBold",
+			scrW / 2, scrH - 100, Color(255, 255, 255), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+
+		-- Draw target position
+		local tr = LocalPlayer():GetEyeTrace()
+		if tr.Hit then
+			local pos = tr.HitPos:ToScreen()
+			if pos.visible then
+				surface.SetDrawColor(17, 73, 113, 200)
+				surface.DrawRect(pos.x - 10, pos.y - 1, 21, 3)
+				surface.DrawRect(pos.x - 1, pos.y - 10, 3, 21)
+
+				local posText = string.format("%.1f, %.1f, %.1f", tr.HitPos.x, tr.HitPos.y, tr.HitPos.z)
+				draw.SimpleText(posText, "DermaDefault", pos.x, pos.y + 20, Color(200, 200, 200), TEXT_ALIGN_CENTER)
+			end
+		end
+	end)
+
+	hook.Add("PlayerButtonDown", "Noir.Dashboard.VectorPick", function(ply, button)
+		if not Dashboard.VectorPickActive then return end
+		if ply ~= LocalPlayer() then return end
+
+		if button == KEY_ESCAPE then
+			if Dashboard.VectorPickCancelCallback then
+				Dashboard.VectorPickCancelCallback()
+			end
+			Dashboard.StopVectorPick()
+			return true
+		end
+	end)
+
+	hook.Add("KeyPress", "Noir.Dashboard.VectorPick", function(ply, key)
+		if not Dashboard.VectorPickActive then return end
+		if ply ~= LocalPlayer() then return end
+
+		if key == IN_ATTACK then
+			local tr = ply:GetEyeTrace()
+			if tr.Hit and Dashboard.VectorPickCallback then
+				Dashboard.VectorPickCallback(tr.HitPos)
+			end
+			Dashboard.StopVectorPick()
+		elseif key == IN_ATTACK2 then
+			if Dashboard.VectorPickCancelCallback then
+				Dashboard.VectorPickCancelCallback()
+			end
+			Dashboard.StopVectorPick()
+		end
+	end)
+end
+
+function Dashboard.StopVectorPick()
+	Dashboard.VectorPickActive = false
+	Dashboard.VectorPickCallback = nil
+	Dashboard.VectorPickCancelCallback = nil
+	hook.Remove("HUDPaint", "Noir.Dashboard.VectorPick")
+	hook.Remove("PlayerButtonDown", "Noir.Dashboard.VectorPick")
+	hook.Remove("KeyPress", "Noir.Dashboard.VectorPick")
 end
 
 -- Console command
