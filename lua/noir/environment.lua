@@ -1,18 +1,29 @@
-local Environment = Noir.Environment or {}
+﻿local Environment = Noir.Environment or {}
 Noir.Environment = Environment
+-- The easylua-derived entity search (the "all"/"us"/... magic tables, FindEntity
+-- and the copy/create helpers) lives in search.lua under Noir.Search. This file
+-- keeps the run context, messaging and per-run variable plumbing.
+
 function Environment.MakeVars()
-	-- Totally did not steal most of this code from easylua
+	-- Builds the per-run variable table on the SENDER. This table is networked
+	-- to the target, so it may only contain plain/networkable values (numbers,
+	-- vectors, entities) -- the magic search tables are functions/metatables and
+	-- cannot survive the transfer, so they are created target-side in
+	-- Environment.UpdateUpvals via Noir.Search.PopulateVars instead.
 	local ply = LocalPlayer()
 	if SERVER or not IsValid(ply) then return {} end
 	local vars = {}
 	vars.me = ply
 	local trace = util.QuickTrace(ply:EyePos(), ply:GetAimVector() * 100000, {ply, ply:GetVehicle()})
+	if trace.Entity:IsWorld() then trace.Entity = NULL end
 	vars.trace = trace
 	vars.this = trace.Entity
 	vars.there = trace.HitPos
 	vars.here = trace.StartPos
 	vars.normal = trace.HitNormal
 	vars.length = trace.StartPos:Distance(trace.HitPos)
+	vars.wep = ply:GetActiveWeapon()
+	vars.veh = ply:GetVehicle()
 	vars.we = {}
 	for _, v in pairs(ents.FindInSphere(ply:GetPos(), 512)) do
 		if v:IsPlayer() then table.insert(vars.we, v) end
@@ -38,7 +49,9 @@ function Environment.SendMessage(target, transferId, message, messageData)
 end
 
 Noir.Network.StringHandlers["scriptMessage"] = {
-	received = function(sender, transferId, data) Noir.Environment.OnMessage(sender, data.origTransferId, data.message, data.string) end
+	received = function(sender, transferId, data)
+		Noir.Environment.OnMessage(sender, data.origTransferId, data.message, data.string)
+	end
 }
 
 Environment.MessageHandlers = {}
@@ -93,137 +106,6 @@ end
 
 Environment.Contexts = {}
 Environment.UsedContexts = {}
-local function compare(a, b)
-	if a == b then return true end
-	if a:find(b, nil, true) then return true end
-	if a:lower() == b:lower() then return true end
-	if a:lower():find(b:lower(), nil, true) then return true end
-	return false
-end
-
-local function comparenick(a, b)
-	if not GLib then return compare(a, b) end
-	if a == b then return true end
-	if a:lower() == b:lower() then return true end
-	if GLib.UTF8.MatchTransliteration(a, b) then return true end
-	return false
-end
-
-local function compareentity(ent, str)
-	if ent.GetName and compare(ent:GetName(), str) then return true end
-	if ent:GetModel() and compare(ent:GetModel(), str) then return true end
-	return false
-end
-
--- this function was stolen from easylua
--- whoever made easylua takes credit, i cant find the original now
-function Environment.FindEntity(str)
-	if not str then return NULL end
-	str = tostring(str)
-	if str == "#this" and IsEntity(this) and this:IsValid() then return this end
-	if str == "#me" and IsEntity(me) and me:IsPlayer() then return me end
-	if str == "#all" then return all end
-	if str:sub(1, 1) == "#" then
-		local str = str:sub(2)
-		if #str > 0 then
-			str = str:lower()
-			local found
-			for key, data in pairs(team.GetAllTeams()) do
-				if data.Name:lower() == str then
-					found = data.Name:lower()
-					break
-				end
-			end
-
-			if not found then
-				local classes = {}
-				for key, ent in pairs(ents.GetAll()) do
-					classes[ent:GetClass():lower()] = true
-				end
-
-				for class in pairs(classes) do
-					if class:lower() == str then
-						print("found", class)
-						found = class
-					end
-				end
-			end
-
-			if found then
-				local func = CreateAllFuncton(function(v) return v:GetClass():lower() == found end)
-				print(func:GetName())
-				return func
-			end
-		end
-	end
-
-	-- unique id
-	local ply = player.GetByUniqueID(str)
-	if ply and ply:IsPlayer() then return ply end
-	-- steam id
-	if str:find("STEAM") then
-		for key, _ply in pairs(player.GetAll()) do
-			if _ply:SteamID() == str then return _ply end
-		end
-	end
-
-	if str:sub(1, 1) == "_" and tonumber(str:sub(2)) then str = str:sub(2) end
-	if tonumber(str) then
-		ply = Entity(tonumber(str))
-		if ply:IsValid() then return ply end
-	end
-
-	-- ip
-	if SERVER and str:find("%d+%.%d+%.%d+%.%d+") then
-		for key, _ply in pairs(player.GetAll()) do
-			if _ply:IPAddress():find(str) then return _ply end
-		end
-	end
-
-	-- search in sensible order
-	-- search exact
-	for _, ply in pairs(player.GetAll()) do
-		if ply:Nick() == str then return ply end
-	end
-
-	-- Search bots so we target those first
-	for key, ply in pairs(player.GetBots()) do
-		if comparenick(ply:Nick(), str) then return ply end
-	end
-
-	-- search from beginning of nick
-	for _, ply in pairs(player.GetHumans()) do
-		if ply:Nick():lower():find(str, 1, true) == 1 then return ply end
-	end
-
-	-- Search normally and search with colorcode stripped
-	for key, ply in pairs(player.GetAll()) do
-		if comparenick(ply:Nick(), str) then return ply end
-		if comparenick(ply:Nick():gsub("%^%d", ""), str) then return ply end
-	end
-
-	for key, ent in pairs(ents.GetAll()) do
-		if compareentity(ent, str) then return ent end
-	end
-
-	do
-		-- class
-		local _str, idx = str:match("(.-)(%d+)")
-		if idx then
-			idx = tonumber(idx)
-			str = _str
-		else
-			str = str
-			idx = (me and me.easylua_iterator) or 0
-		end
-
-		local found = {}
-		for key, ent in pairs(ents.GetAll()) do
-			if compare(ent:GetClass(), str) then table.insert(found, ent) end
-		end
-		return found[math.Clamp(idx % #found, 1, #found)] or NULL
-	end
-end
 
 -- Update upvalues on receiving end
 function Environment.UpdateUpvals(context)
@@ -246,7 +128,9 @@ function Environment.UpdateUpvals(context)
 		end
 	end
 
-	vars.E = Environment.FindEntity
+	-- Magic search tables + copy/create/E helpers. Built here, target-side,
+	-- because they hold closures/metatables that can't be networked from MakeVars.
+	Noir.Search.PopulateVars(vars, context.Runner)
 	vars.__ENV = vars
 	vars.__CONTEXT = context
 end
@@ -254,7 +138,9 @@ end
 -- Update upvalues on server for stuff that is not avalible clientside
 function Environment.UpdateVarsSV(data)
 	local vars = data.vars
-	vars.these = constraint.GetAllConstrainedEntities(vars.this)
+	-- Precompute the constrained-entity list server-side (authoritative) and ship
+	-- it along so the magic `these` table is accurate even on a client target.
+	if IsValid(vars.this) then vars.__constrained = constraint.GetAllConstrainedEntities(vars.this) end
 end
 
 function Environment.CreateContext(runner, transferId, vars)
@@ -277,9 +163,11 @@ function Environment.CreateContext(runner, transferId, vars)
 			if upval ~= nil then return upval end
 			local gvar = _G[key]
 			if gvar ~= nil then return gvar end
-			if not nils[key] and easylua ~= nil then -- uh oh
-				var = easylua.FindEntity(key)
-				if var:IsValid() then return var end
+			if not nils[key] then
+				var = Noir.Search.FindEntity(key, ContextTable.Upvalues)
+				if isentity(var) and var:IsValid() then return var end
+				-- magic search tables / lists aren't entities; return as-is
+				if var ~= nil and not isentity(var) then return var end
 			end
 			return nil
 		end,
@@ -335,4 +223,4 @@ concommand.Add("noir_clearenvs_all", function(ply)
 	end
 
 	Noir.Msg("Cleared ", Color(0, 150, 0), tostring(cleared), Color(255, 255, 255), " envs.")
-end, nil, "Clears unused Noir environments")
+end, nil, "Clears all Noir environments")

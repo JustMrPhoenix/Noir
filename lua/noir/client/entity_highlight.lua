@@ -1,12 +1,9 @@
-local Highlight = {}
-
+﻿local Highlight = {}
 Highlight.Entities = {}
 Highlight.HookId = "NoirEntityHighlight"
 Highlight.OutlineColor = Color(0, 255, 100, 255)
-
 local function renderHighlight()
 	local validEnts = {}
-
 	for ent in pairs(Highlight.Entities) do
 		if IsValid(ent) then
 			table.insert(validEnts, ent)
@@ -21,21 +18,19 @@ local function renderHighlight()
 	end
 
 	halo.Add(validEnts, Highlight.OutlineColor, 3, 3, 1, true, true)
-
 	render.SetColorModulation(0, 1, 0.4)
 	render.SetBlend(0.3)
 	for _, ent in ipairs(validEnts) do
 		ent:DrawModel()
 	end
+
 	render.SetColorModulation(1, 1, 1)
 	render.SetBlend(1)
 end
 
 local function ensureHook()
 	local hooks = hook.GetTable()["PostDrawOpaqueRenderables"]
-	if not hooks or not hooks[Highlight.HookId] then
-		hook.Add("PostDrawOpaqueRenderables", Highlight.HookId, renderHighlight)
-	end
+	if not hooks or not hooks[Highlight.HookId] then hook.Add("PostDrawOpaqueRenderables", Highlight.HookId, renderHighlight) end
 end
 
 -- Add an entity to the highlight list
@@ -59,9 +54,7 @@ end
 -- Remove a specific entity from highlights
 function Highlight.Remove(ent)
 	Highlight.Entities[ent] = nil
-	if not next(Highlight.Entities) then
-		Highlight.Clear()
-	end
+	if not next(Highlight.Entities) then Highlight.Clear() end
 end
 
 -- Toggle an entity's highlight state
@@ -87,14 +80,11 @@ end
 
 -- Stop is alias for Clear (backwards compatibility)
 Highlight.Stop = Highlight.Clear
-
 -- Get all highlighted entities
 function Highlight.GetEntities()
 	local result = {}
 	for ent in pairs(Highlight.Entities) do
-		if IsValid(ent) then
-			table.insert(result, ent)
-		end
+		if IsValid(ent) then table.insert(result, ent) end
 	end
 	return result
 end
@@ -103,5 +93,4 @@ end
 function Highlight.GetEntity()
 	return next(Highlight.Entities)
 end
-
 return Highlight

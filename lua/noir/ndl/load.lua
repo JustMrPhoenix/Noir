@@ -1,8 +1,6 @@
-local NDL =  Noir.DebugLib or {}
+﻿local NDL = Noir.DebugLib or {}
 Noir.DebugLib = NDL
 _G.NDL = NDL
-
-
 local function printModule(path)
 	local str = Format("| [SH] MODULE: %-17s |", path)
 	print(str)

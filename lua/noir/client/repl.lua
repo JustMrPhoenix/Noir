@@ -1,9 +1,6 @@
-local PANEL = {}
-
+﻿local PANEL = {}
 PANEL.Base = "EditablePanel"
-
 PANEL.URL = Noir.DEBUG and "http://loopback.bestboy.moe:8080/repl.html" or "https://metastruct.github.io/gmod-monaco/repl.html"
-
 function PANEL:Init()
 	local html = self:Add("DHTML")
 	html:Dock(FILL)
@@ -27,27 +24,28 @@ function PANEL:Init()
 
 	local comboBox = self:Add("DComboBox")
 	comboBox:SetSkin("Noir")
-	comboBox:SetTextInset( 32, 0 )
+	comboBox:SetTextInset(32, 0)
 	comboBox:SetText("Run on self")
 	comboBox:SetIcon("icon16/user.png")
 	comboBox:SetSize(150, 20)
 	comboBox.m_Image:SetPos(4, 2)
-
 	self.TargetCombobox = comboBox
 	comboBox.OpenMenu = function(_, pControlOpener)
-		if IsValid( comboBox.Menu ) then
+		if IsValid(comboBox.Menu) then
 			comboBox.Menu:Remove()
 			comboBox.Menu = nil
 		end
+
 		self:FillMenu()
-		local x, y = comboBox:LocalToScreen( 0, comboBox:GetTall() )
-		comboBox.Menu:SetMinimumWidth( comboBox:GetWide() )
-		comboBox.Menu:Open( x, y, false, comboBox )
+		local x, y = comboBox:LocalToScreen(0, comboBox:GetTall())
+		comboBox.Menu:SetMinimumWidth(comboBox:GetWide())
+		comboBox.Menu:Open(x, y, false, comboBox)
 	end
 
 	self:RequestFocus()
 	self.Target = "self"
 	self.ReplCounter = 0
+	self.Actions = {}
 end
 
 function PANEL:OnSizeChanged(newWidth, newHeight)
@@ -67,17 +65,14 @@ function PANEL:FillMenu()
 	runMenu:Hide()
 	self.RunMenu = runMenu
 	self.TargetCombobox.Menu = runMenu
-
 	self:AddRunOption("Run on self", "self", "icon16/user.png")
 	self:AddRunOption("Run on server", "server", "icon16/server.png")
-
 	local runOnSubmenu, runOnMenu = runMenu:AddSubMenu("Run on client")
 	runOnMenu:SetIcon("icon16/user_go.png")
 	runOnMenu:SetTextColor(Color(200, 200, 200))
 	runOnSubmenu:SetDeleteSelf(false)
 	runOnSubmenu:SetSkin("Noir")
 	self.RunOnSubmenu = runOnSubmenu
-
 	for _, v in pairs(player.GetHumans()) do
 		self:AddRunOption(v:Nick(), v, v:IsSuperAdmin() and "icon16/user_suit.png" or "icon16/user.png", runOnSubmenu)
 	end
@@ -95,15 +90,14 @@ function PANEL:AddRunOption(label, target, icon, menu)
 		self:RunJS("replinterface.ResetAutocompletion()")
 		if target == "server" then
 			self:RunJS("replinterface.LoadAutocompleteState(\"Server\")")
-		elseif  target == "shared" then
-			self:RunJS(Noir.Autocomplete.GetJSWithState("Shared","replinterface"))
+		elseif target == "shared" then
+			self:RunJS(Noir.Autocomplete.GetJSWithState("Shared", "replinterface"))
 		else
-			self:RunJS(Noir.Autocomplete.GetJSWithState("Client","replinterface"))
+			self:RunJS(Noir.Autocomplete.GetJSWithState("Client", "replinterface"))
 		end
 	end)
 
 	-- replinterface.LoadAutocompleteState("client")
-
 	option:SetIcon(icon)
 	option:SetTextColor(Color(200, 200, 200))
 end
@@ -117,6 +111,7 @@ end
 
 function PANEL:RequestFocus()
 	self.HTMLPanel:RequestFocus()
+	if self.Ready then self:RunJS("if (window.replinterface && replinterface.line) replinterface.line.focus();") end
 end
 
 function PANEL:SetStatus(text, color, prependTime)
@@ -139,9 +134,7 @@ function PANEL:RunJS(code, ...)
 end
 
 function PANEL:AddJSCallback(name)
-	self.HTMLPanel:AddFunction("replinterface", name, function(...)
-		self["JS_" .. name](self, ...)
-	end)
+	self.HTMLPanel:AddFunction("replinterface", name, function(...) self["JS_" .. name](self, ...) end)
 end
 
 function PANEL:OnLog(...)
@@ -151,36 +144,48 @@ end
 function PANEL:JS_OnCode(code)
 	self.Code = code
 	self.LastEdit = CurTime()
+	if self.OnCode then self:OnCode(code) end
+end
 
-	if self.OnCode then
-		self:OnCode(code)
-	end
+function PANEL:AddAction(id, label, callback, keyBindings)
+	self.Actions[id] = callback
+	if isstring(keyBindings) then keyBindings = {keyBindings} end
+	self:RunJS([[replinterface.AddAction(%s)]], util.TableToJSON({
+		id = id,
+		label = label,
+		keyBindings = keyBindings
+	}))
+end
+
+function PANEL:JS_OnAction(id)
+	if self.OnAction then self:OnAction(id) end
+	if self.Actions[id] then self.Actions[id](self, id) end
 end
 
 function PANEL:JS_OnReady()
-	self:RunJS(Noir.Autocomplete.GetJSWithState("Client","replinterface"))
+	self:RunJS(Noir.Autocomplete.GetJSWithState("Client", "replinterface"))
+	Noir.Editor.RegisterActions(self)
 	self:SetStatus("Ready", Color(0, 150, 0))
 	self.Ready = true
+	-- Flush any text that was buffered before the HTML was ready
+	if self.TextBuffer then
+		for _, text in ipairs(self.TextBuffer) do
+			self:RunJS("replinterface.AddText(\"%s\")", text:JavascriptSafe())
+		end
+
+		self.TextBuffer = nil
+	end
 
 	self.StatusButton.DoClick = function() end
-
 	-- Request focus now that the HTML panel is ready
-	if self:IsVisible() then
-		self:RequestFocus()
-	end
-
-	if self.OnReady then
-		self:OnReady()
-	end
+	if self:IsVisible() then self:RequestFocus() end
+	if self.OnReady then self:OnReady() end
 end
 
 function PANEL:OnCode(code)
 	local returnCode = "return " .. code
 	local returnCompile = CompileString(returnCode, "Noir.replValidation", false)
-	if isfunction(returnCompile) then
-		code = returnCode
-	end
-
+	if isfunction(returnCompile) then code = returnCode end
 	if self.Target == "clients" then
 		self.targets = #player.GetHumans()
 	elseif self.Target == "shared" then
@@ -188,6 +193,7 @@ function PANEL:OnCode(code)
 	else
 		self.targets = 1
 	end
+
 	local identifier = "Noir.repl" .. self.ReplCounter
 	local id = Noir.Network.GenerateTransferId()
 	self.ReplCounter = self.ReplCounter + 1
@@ -195,20 +201,21 @@ function PANEL:OnCode(code)
 		Editor.MonacoPanel:SetStatus("Could not send code! See console for details", Color(150, 0, 0))
 		return
 	end
+
 	self.totalRan = 0
 	self.hasError = false
 	self.lastTransfer = id
 	Noir.Environment.RegisterHandler(function(...)
-		local succ, err = pcall( self.OnMessage, self, self.Target, identifier, ...)
-		if not succ then
-			self:AddText(Format("--[[%s: Could not display output]] %s", identifier, err))
-		end
+		local succ, err = pcall(self.OnMessage, self, self.Target, identifier, ...)
+		if not succ then self:AppendText(Format("--[[%s: Could not display output]] %s", identifier, err)) end
 	end, id)
+
 	local succ, err = pcall(Noir.SendCode, code, identifier, self.Target, id)
 	if not succ then
 		self:SetStatus(Format("Error: %s", err), Color(150, 0, 0), true)
-		self:AddText(Format("--[[Could not run code: %s]]", err))
+		self:AppendText(Format("--[[Could not run code: %s]]", err))
 	end
+
 	self:UpdateCOH()
 end
 
@@ -228,11 +235,12 @@ function PANEL:OnRunResult(identifier, sender, transferId, results)
 		end
 	elseif not self.hasError then
 		if self.targets ~= 1 then
-			self:SetStatus(Format("[%i/%i] Ran on %s successfully",  self.totalRan, self.targets, senderName), Color(0, 150, 0), true)
+			self:SetStatus(Format("[%i/%i] Ran on %s successfully", self.totalRan, self.targets, senderName), Color(0, 150, 0), true)
 		else
 			self:SetStatus(Format("Ran on %s successfully", senderName), Color(0, 150, 0), true)
 		end
 	end
+
 	self:UpdateCOH()
 end
 
@@ -248,25 +256,29 @@ function PANEL:OnMessage(target, replName, sender, transferId, message, messageB
 			messageBody = runResults[2]
 		end
 	end
-	if string.find(messageBody, "\n") then
-		messageBody = "\n" .. messageBody
-	end
+
+	if string.find(messageBody, "\n") then messageBody = "\n" .. messageBody end
 	if target == "shared" or target == "clients" then
 		local senderName = sender == Entity(0) and "SERVER" or tostring(sender)
-		self:AddText(Format("--[[%-13s: %s : %s]] %s", replName, senderName, message, messageBody))
+		self:AppendText(Format("--[[%-13s: %s : %s]] %s", replName, senderName, message, messageBody))
 	else
-		self:AddText(Format("--[[%-13s: %s]] %s", replName, message, messageBody))
+		self:AppendText(Format("--[[%-13s: %s]] %s", replName, message, messageBody))
 	end
 end
 
-function PANEL:AddText(text)
+function PANEL:AppendText(text)
+	if not self.Ready then
+		self.TextBuffer = self.TextBuffer or {}
+		table.insert(self.TextBuffer, text)
+		return
+	end
+
 	self:RunJS("replinterface.AddText(\"%s\")", text:JavascriptSafe())
 end
 
 function PANEL:SetupHTML()
 	self.HTMLPanel:OpenURL(self.URL)
 	self:AddJSCallback("OnReady")
-
 	self.HTMLPanel:AddFunction("console", "log", function(...)
 		Noir.Debug("console.log", ...)
 		self:OnLog(...)
@@ -277,15 +289,11 @@ function PANEL:SetupHTML()
 		self:OnLog(...)
 	end)
 
-	self.HTMLPanel:AddFunction("console", "debug", function(...)
-		Noir.Debug("console.debug", ...)
-	end)
-
+	self.HTMLPanel:AddFunction("console", "debug", function(...) Noir.Debug("console.debug", ...) end)
 	self.HTMLPanel:AddFunction("console", "error", function(...)
 		Noir.Error("[", Color(0, 0, 150), "Editor", Color(255, 255, 255), "] ", ..., "\n")
 	end)
-
-	self.HTMLPanel:AddFunction("replinterface","OpenURL", function(url)
+	self.HTMLPanel:AddFunction("replinterface", "OpenURL", function(url)
 		Noir.Debug("OpenURL", url)
 		if self.OnOpenURL then
 			self:OnOpenURL(url)
@@ -295,19 +303,17 @@ function PANEL:SetupHTML()
 	end)
 
 	self:AddJSCallback("OnCode")
+	self:AddJSCallback("OnAction")
 end
 
 function PANEL:UpdateCOH()
 	if not coh then return end
-	local cohText = Format(
-		"%d repls so far\n%s",
-		self.ReplCounter or 0,
-		self.status or "Status uknown"
-	)
+	local cohText = Format("%d repls so far\n%s", self.ReplCounter or 0, self.status or "Status uknown")
 	local maxLineLen = 0
 	for _, line in pairs(string.Split(cohText, "\n")) do
 		maxLineLen = math.max(maxLineLen, string.len(line))
 	end
+
 	local indentSize = math.ceil(maxLineLen / 2)
 	cohText = string.rep(" ", indentSize) .. "[Noir Console]" .. string.rep(" ", indentSize) .. "\n" .. cohText
 	coh.SendTypedMessage(cohText)
@@ -315,7 +321,6 @@ end
 
 -- Register as VGUI component for use in editor tabs
 vgui.Register("NoirReplPanel", PANEL, "EditablePanel")
-
 -- Show the main console tab in the editor (replaces separate REPL window)
 function Noir.ShowRepl()
 	if coh then coh.StartChat() end
@@ -324,6 +329,4 @@ function Noir.ShowRepl()
 	Noir.Editor.ShowMainConsole()
 end
 
-concommand.Add("noir_showrepl", function(ply, cmd, args)
-	Noir.ShowRepl()
-end)
+concommand.Add("noir_showrepl", function(ply, cmd, args) Noir.ShowRepl() end)

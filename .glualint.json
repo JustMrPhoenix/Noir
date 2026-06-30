@@ -1,0 +1,4 @@
+{
+	"lint_maxScopeDepth": 0,
+	"lint_ignoreFiles": ["**/includes/modules/**"]
+}

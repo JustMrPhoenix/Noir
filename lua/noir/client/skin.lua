@@ -1,4 +1,4 @@
-local SKIN = {}
+﻿local SKIN = {}
 SKIN.PrintName = "Noir editor skin"
 SKIN.Author = "Mr.Phoenix"
 SKIN.Colours = {}
@@ -22,7 +22,6 @@ SKIN.Colours.Tree.Hover = SKIN.Colours.Tree.Lines
 SKIN.Colours.Tree.Selected = SKIN.Colours.Tree.Lines
 SKIN.colTextEntryText = Color(240, 240, 240)
 SKIN.colTextEntryTextPlaceholder = Color(153, 153, 153)
-
 function SKIN:PaintFrame(panel, w, h)
 	DisableClipping(true)
 	surface.SetDrawColor(0, 0, 0, 90)
@@ -32,11 +31,7 @@ function SKIN:PaintFrame(panel, w, h)
 	surface.DrawRect(0, 0, w, h)
 	surface.SetDrawColor(51, 51, 51)
 	surface.DrawRect(0, 0, w, 24)
-
-	if panel:GetSizable() then
-		draw.DrawText("o", "Marlett", w - 15, h - 15, Color(121, 121, 121), TEXT_ALIGN_RIGHT)
-	end
-
+	if panel:GetSizable() then draw.DrawText("o", "Marlett", w - 15, h - 15, Color(121, 121, 121), TEXT_ALIGN_RIGHT) end
 	draw.DrawText(panel:GetTitle(), "Trebuchet18", w / 2, 3, Color(204, 204, 204), TEXT_ALIGN_CENTER)
 end
 
@@ -69,7 +64,10 @@ function SKIN:PaintWindowMaximizeButton(panel, w, h)
 	end
 
 	surface.DrawRect(0, 0, w, h)
-	draw.DrawText(panel:GetParent().Maximized and "2" or "1", "Marlett", w / 2, 5, Color(255, 255, 255, panel:GetAlpha()), TEXT_ALIGN_CENTER)
+	draw.DrawText(
+		panel:GetParent().Maximized and "2" or "1", "Marlett",
+		w / 2, 5, Color(255, 255, 255, panel:GetAlpha()), TEXT_ALIGN_CENTER
+	)
 end
 
 function SKIN:PaintMenu(panel, w, h)
@@ -85,7 +83,6 @@ function SKIN:PaintMenuOption(panel, w, h)
 	if panel:GetDisabled() then
 		surface.SetDrawColor(Color(0, 0, 0, 100))
 		surface.DrawRect(0, 0, w, h)
-
 		return
 	end
 
@@ -102,7 +99,6 @@ end
 
 function SKIN:PaintButtonLeft(panel, w, h)
 	local alpha
-
 	if panel.Depressed then
 		alpha = 200
 	elseif panel.Hovered then
@@ -118,7 +114,6 @@ end
 
 function SKIN:PaintButtonRight(panel, w, h)
 	local alpha
-
 	if panel.Depressed then
 		alpha = 200
 	elseif panel.Hovered then
@@ -134,7 +129,6 @@ end
 
 function SKIN:PaintScrollBarGrip(panel, w, h)
 	local alpha
-
 	if panel.Depressed then
 		alpha = 102
 	elseif panel.Hovered then
@@ -150,7 +144,6 @@ end
 function SKIN:PaintButtonDown(panel, w, h)
 	if not panel.m_bBackground then return end
 	local alpha
-
 	if panel.Depressed or panel:IsSelected() then
 		alpha = 200
 	elseif panel:GetDisabled() then
@@ -167,7 +160,6 @@ end
 function SKIN:PaintButtonUp(panel, w, h)
 	if not panel.m_bBackground then return end
 	local alpha
-
 	if panel.Depressed or panel:IsSelected() then
 		alpha = 200
 	elseif panel:GetDisabled() then
@@ -198,19 +190,17 @@ function SKIN:PaintTextEntry(panel, w, h)
 		surface.DrawRect(0, 0, w, h)
 	end
 
-	if panel.GetPlaceholderText and panel.GetPlaceholderColor and panel:GetPlaceholderText() and panel:GetPlaceholderText():Trim() ~= "" and panel:GetPlaceholderColor() and (not panel:GetText() or panel:GetText() == "") then
+	if panel.GetPlaceholderText and panel.GetPlaceholderColor and panel:GetPlaceholderText()
+		and panel:GetPlaceholderText():Trim() ~= "" and panel:GetPlaceholderColor()
+		and (not panel:GetText() or panel:GetText() == "")
+	then
 		local oldText = panel:GetText()
 		local str = panel:GetPlaceholderText()
-
-		if (str:StartWith("#")) then
-			str = str:sub(2)
-		end
-
+		if str:StartWith("#") then str = str:sub(2) end
 		str = language.GetPhrase(str)
 		panel:SetText(str)
 		panel:DrawTextEntryText(panel:GetPlaceholderColor(), panel:GetHighlightColor(), panel:GetCursorColor())
 		panel:SetText(oldText)
-
 		return
 	end
 
@@ -218,8 +208,7 @@ function SKIN:PaintTextEntry(panel, w, h)
 end
 
 function SKIN:PaintComboBox(panel, w, h)
-	if (panel:GetDisabled()) then return self.tex.Input.ComboBox.Disabled(0, 0, w, h) end
-
+	if panel:GetDisabled() then return self.tex.Input.ComboBox.Disabled(0, 0, w, h) end
 	if panel.Depressed or panel:IsMenuOpen() then
 		DisableClipping(true)
 		surface.SetDrawColor(0, 127, 212)
@@ -265,31 +254,25 @@ function SKIN:PaintTree(panel, w, h)
 end
 
 function SKIN:PaintTreeNodeButton(panel, w, h)
-	local node = panel:GetParent()
-	local expanded = node and node.GetExpanded and node:GetExpanded()
-	if expanded then
-		draw.DrawText("6", "Marlett", w / 2, h / 2 - 4, Color(187, 187, 187, panel:GetAlpha()), TEXT_ALIGN_CENTER)
-	else
-		draw.DrawText("4", "Marlett", w / 2, h / 2 - 4, Color(187, 187, 187, panel:GetAlpha()), TEXT_ALIGN_CENTER)
+	if panel:IsSelected() then
+		surface.SetDrawColor(4, 57, 94)
+		surface.DrawRect(0, 0, w, h)
+	elseif panel.Hovered then
+		surface.SetDrawColor(42, 45, 46)
+		surface.DrawRect(0, 0, w, h)
 	end
 end
 
 function SKIN:PaintCheckBox(panel, w, h)
 	surface.SetDrawColor(60, 60, 60)
 	surface.DrawRect(0, 0, w, h)
-
-	if panel:GetChecked() then
-		draw.DrawText("a", "Marlett", w / 2, 1, Color(204, 204, 204), TEXT_ALIGN_CENTER)
-	end
+	if panel:GetChecked() then draw.DrawText("a", "Marlett", w / 2, 1, Color(204, 204, 204), TEXT_ALIGN_CENTER) end
 end
 
 function SKIN:PaintRadioButton(panel, w, h)
 	surface.SetDrawColor(60, 60, 60)
 	surface.DrawRect(0, 0, w, h)
-
-	if panel:GetChecked() then
-		draw.DrawText("i", "Marlett", w / 2, 1, Color(204, 204, 204), TEXT_ALIGN_CENTER)
-	end
+	if panel:GetChecked() then draw.DrawText("i", "Marlett", w / 2, 1, Color(204, 204, 204), TEXT_ALIGN_CENTER) end
 end
 
 function SKIN:PaintVScrollBar(panel, w, h)
@@ -379,7 +362,6 @@ end
 
 function SKIN:PaintSliderKnob(panel, w, h)
 	local alpha
-
 	if panel.Depressed then
 		alpha = 200
 	elseif panel.Hovered then
@@ -394,7 +376,6 @@ end
 
 function SKIN:PaintNumberUp(panel, w, h)
 	local alpha
-
 	if panel.Depressed then
 		alpha = 200
 	elseif panel.Hovered then
@@ -410,7 +391,6 @@ end
 
 function SKIN:PaintNumberDown(panel, w, h)
 	local alpha
-
 	if panel.Depressed then
 		alpha = 200
 	elseif panel.Hovered then

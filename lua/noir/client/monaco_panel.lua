@@ -1,4 +1,4 @@
-local PANEL = {}
+﻿local PANEL = {}
 -- Since gmod does not allow you to open localhost urls im using loopback.bestboy.moe that points to 127.0.0.1
 PANEL.URL = Noir.DEBUG and "http://loopback.bestboy.moe:8080" or "https://metastruct.github.io/gmod-monaco/"
 PANEL.SHOULD_VALIDATE = true
@@ -10,12 +10,10 @@ keybind.ctrlKey = true;
 keybind.shiftKey = true;
 keybind.keyCode = 46; //monaco.KeyCode.KeyP
 editor._standaloneKeybindingService.updateResolver();]]
-
 local function addColumn(listView, name)
 	local column = listView:AddColumn(name)
 	column.Header.BackgroundColor = Color(40, 40, 40)
 	column.Header.HoveredColor = Color(70, 70, 70)
-
 	return column
 end
 
@@ -24,7 +22,6 @@ function PANEL:Init()
 	self.HTMLPanel = self:Add("DHTML")
 	self.HTMLPanel:Dock(FILL)
 	self:SetupHTML()
-
 	self.ErrorList = self:Add("DListView")
 	self.ErrorList:Dock(BOTTOM)
 	self.ErrorList:SetPaintBackground(false)
@@ -38,7 +35,6 @@ function PANEL:Init()
 	addColumn(self.ErrorList, "Message")
 	addColumn(self.ErrorList, "Code"):SetMaxWidth(40)
 	addColumn(self.ErrorList, "Line"):SetMaxWidth(25)
-
 	self.ErrorList.DoDoubleClick = function(_, _, line)
 		if not line.event then return end
 		self:RunJS("gmodinterface.GotoLine(%s)", line.event.line)
@@ -50,7 +46,6 @@ function PANEL:Init()
 	self.StatusButton:SetHeight(20)
 	self.StatusButton:SetColor(Color(255, 255, 255))
 	self:SetStatus("Loading (Press here to reload)")
-
 	self.StatusButton.DoClick = function()
 		self.HTMLPanel:StopLoading()
 		self:SetStatus("Loading (Press here to reload)")
@@ -69,6 +64,7 @@ end
 
 function PANEL:RequestFocus()
 	self.HTMLPanel:RequestFocus()
+	if self.Ready then self:RunJS("if (window.editor) editor.focus();") end
 end
 
 function PANEL:SetStatus(text, color, prependTime)
@@ -93,11 +89,7 @@ function PANEL:ValidateCode()
 	if self.Language ~= "glua" then
 		self:SubmitLuaReport({})
 		local langName = self.Language
-
-		if self.LanguageData.aliases and #self.LanguageData.aliases then
-			langName = self.LanguageData.aliases[1]
-		end
-
+		if self.LanguageData.aliases and #self.LanguageData.aliases then langName = self.LanguageData.aliases[1] end
 		self:SetStatus(("No validation (%s)"):format(langName), Color(0, 150, 0), true)
 		return
 	end
@@ -109,8 +101,9 @@ function PANEL:ValidateCode()
 
 	local succ, ret = pcall(function()
 		local report = luacheck.get_report(self.Code)
-		return luacheck.filter.filter({ report })
+		return luacheck.filter.filter({report})
 	end)
+
 	local events = succ and ret[1] or {}
 	Noir.Debug("Validation", succ, events)
 	if succ and #events > 0 then
@@ -122,10 +115,12 @@ function PANEL:ValidateCode()
 	elseif succ and #events == 0 then
 		self:SetStatus("Validated. No issues", Color(0, 150, 0), true)
 	end
+
 	local reportInfo = {
 		errors = 0,
 		warnings = 0
 	}
+
 	if succ then
 		local luaReportEvents = {}
 		self.ErrorList:Clear()
@@ -139,7 +134,8 @@ function PANEL:ValidateCode()
 			else
 				reportInfo.warnings = reportInfo.warnings + 1
 			end
-			local reportEvent =  {
+
+			local reportEvent = {
 				message = message,
 				isError = isError,
 				line = event.line,
@@ -147,6 +143,7 @@ function PANEL:ValidateCode()
 				endColumn = event.end_column,
 				luacheckCode = code,
 			}
+
 			table.insert(luaReportEvents, reportEvent)
 			-- icon16/cancel.png or icon16/error.png
 			local icon = vgui.Create("DImage", self.ErrorList)
@@ -154,20 +151,22 @@ function PANEL:ValidateCode()
 			local line = self.ErrorList:AddLine(icon, message, code, event.line)
 			line.event = reportEvent
 		end
+
 		reportInfo.events = luaReportEvents
 		self.LastReport = reportInfo
 		self:SubmitLuaReport(luaReportEvents)
 	else
 		self:SubmitLuaReport({})
 	end
-	if self.OnValidation then
-		self:OnValidation(succ, reportInfo)
-	end
+
+	if self.OnValidation then self:OnValidation(succ, reportInfo) end
 end
 
 function PANEL:SubmitLuaReport(events)
 	self.LastReportEvents = events
-	self:RunJS([[gmodinterface.SubmitLuaReport(%s)]], util.TableToJSON({events = events}))
+	self:RunJS([[gmodinterface.SubmitLuaReport(%s)]], util.TableToJSON({
+		events = events
+	}))
 end
 
 function PANEL:AddLuaError(msg, errorLine)
@@ -182,6 +181,7 @@ function PANEL:AddLuaError(msg, errorLine)
 		endColumn = 100,
 		luacheckCode = "000"
 	}
+
 	line.event = reportEvent
 	Noir.Debug("AddLuaError", reportEvent, line, msg)
 	table.insert(self.LastReportEvents, reportEvent)
@@ -200,22 +200,14 @@ function PANEL:JS_OnReady()
 	self:RunJS(self.CUSTOM_JS)
 	self:SetStatus("Ready", Color(0, 150, 0))
 	self.Ready = true
-	self.StatusButton.DoClick = function()
-		self:ToggleErrorList()
-	end
-
-	if self.OnReady then
-		self:OnReady()
-	end
+	self.StatusButton.DoClick = function() self:ToggleErrorList() end
+	if self.OnReady then self:OnReady() end
 end
 
 function PANEL:JS_OnCode(code)
 	self.Code = code
 	self.LastEdit = CurTime()
-
-	if self.OnCode then
-		self:OnCode(code)
-	end
+	if self.OnCode then self:OnCode(code) end
 end
 
 function PANEL:Think()
@@ -238,11 +230,7 @@ end
 
 function PANEL:AddAction(id, label, callback, keyBindings)
 	self.Actions[id] = callback
-
-	if isstring(keyBindings) then
-		keyBindings = {keyBindings}
-	end
-
+	if isstring(keyBindings) then keyBindings = {keyBindings} end
 	self:RunJS([[gmodinterface.AddAction(%s)]], util.TableToJSON({
 		id = id,
 		label = label,
@@ -251,10 +239,7 @@ function PANEL:AddAction(id, label, callback, keyBindings)
 end
 
 function PANEL:JS_OnAction(id)
-	if self.OnAction then
-		self:OnAction(id)
-	end
-
+	if self.OnAction then self:OnAction(id) end
 	self.Actions[id](self, id)
 end
 
@@ -300,26 +285,18 @@ function PANEL:GetSessions()
 end
 
 function PANEL:JS_OnSessions(sessions)
-	if self.OnSessions then
-		self:OnSessions(sessions)
-	end
+	if self.OnSessions then self:OnSessions(sessions) end
 end
 
 function PANEL:JS_OnSessionSet(session)
 	self.Language = session.language
-
 	if self.avaliableLaungages then
 		for _, v in pairs(self.avaliableLaungages) do
-			if v.id == session.language then
-				self.LanguageData = v
-			end
+			if v.id == session.language then self.LanguageData = v end
 		end
 	end
 
-	if self.OnSessionSet then
-		self:OnSessionSet(session)
-	end
-
+	if self.OnSessionSet then self:OnSessionSet(session) end
 	self:JS_OnCode(session.code)
 end
 
@@ -340,7 +317,6 @@ end
 function PANEL:SetupHTML()
 	self.HTMLPanel:OpenURL(self.URL)
 	self:AddJSCallback("OnReady")
-
 	self.HTMLPanel:AddFunction("console", "log", function(...)
 		Noir.Debug("console.log", ...)
 		self:OnLog(...)
@@ -351,15 +327,11 @@ function PANEL:SetupHTML()
 		self:OnLog(...)
 	end)
 
-	self.HTMLPanel:AddFunction("console", "debug", function(...)
-		Noir.Debug("console.debug", ...)
-	end)
-
+	self.HTMLPanel:AddFunction("console", "debug", function(...) Noir.Debug("console.debug", ...) end)
 	self.HTMLPanel:AddFunction("console", "error", function(...)
 		Noir.Error("[", Color(0, 0, 150), "Editor", Color(255, 255, 255), "] ", ..., "\n")
 	end)
-
-	self.HTMLPanel:AddFunction("gmodinterface","OpenURL", function(url)
+	self.HTMLPanel:AddFunction("gmodinterface", "OpenURL", function(url)
 		Noir.Debug("OpenURL", url)
 		if self.OnOpenURL then
 			self:OnOpenURL(url)
