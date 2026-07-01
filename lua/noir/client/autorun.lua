@@ -298,7 +298,9 @@ function Autorun.RegisterDashboard()
 				Autorun.Enabled = true
 				Autorun.Save()
 				Noir.Msg("Autorun: Crash warning acknowledged. Autorun re-enabled.\n")
-				-- Refresh dashboard to remove warning
+				-- Defer the dashboard rebuild out of this DoClick: RegisterDashboard
+				-- refreshes the tabs, destroying the panel this button lives in, which
+				-- we can't safely do while its own click handler is still running.
 				timer.Simple(0.1, function() Autorun.RegisterDashboard() end)
 			end
 		})

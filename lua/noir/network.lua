@@ -20,14 +20,25 @@ local function callHandler(handlerName, eventName, ...)
 	handlers[eventName](...)
 end
 
+-- Access gate for incoming code transfers. The NoirSendCode hook gets the first
+-- say (receiving the sender and the run target): if any listener returns a
+-- non-nil value we honor it, otherwise we fall back to the superadmin check.
+-- Only consulted on the server (the authority for CL -> SV and CL -> SH/CLS
+-- runs) — clients trust transfers relayed by the server, and local "self" runs
+-- never reach the network so they skip this entirely.
+function Network.CheckAccess(sender, target)
+	local allowed = hook.Run("NoirSendCode", sender, target)
+	if allowed ~= nil then return allowed == true end
+	return sender:IsSuperAdmin()
+end
+
 Network.Receivers = {
 	[0] = function(sender)
 		-- TrasnferID setup
-		if SERVER and not sender:IsSuperAdmin() then return end
-		if CLIENT and sender ~= Entity(0) and (sender:IsPlayer() and not sender:IsSuperAdmin()) then return end
 		local transferId = net.ReadString()
 		local data = net.ReadTable()
 		local target = data.target
+		if SERVER and not Network.CheckAccess(sender, target) then return end
 		local senderID = sender ~= Entity(0) and sender:SteamID() or "SERVER"
 		local tbl = Network.Transfers[senderID] or {}
 		Network.Transfers[senderID] = tbl
@@ -51,8 +62,6 @@ Network.Receivers = {
 	end,
 	[1] = function(sender)
 		-- string part
-		if SERVER and not sender:IsSuperAdmin() then return end
-		if CLIENT and sender ~= Entity(0) and (sender:IsPlayer() and not sender:IsSuperAdmin()) then return end
 		local transferId = net.ReadString()
 		-- Length-prefixed binary read so chunks containing \x00 survive (net.ReadString
 		-- truncates at the first null byte).
@@ -70,6 +79,7 @@ Network.Receivers = {
 		end
 
 		local target = info.target
+		if SERVER and not Network.CheckAccess(sender, target) then return end
 		if SERVER and target ~= "server" then
 			local sendTo = target
 			if target == "shared" or target == "clients" then sendTo = player.GetHumans() end
@@ -119,6 +129,8 @@ end
 
 function Network.SendParts(transferId, partsTable, target)
 	for k, v in pairs(partsTable) do
+		-- Genuine pacing: stagger chunks 0.2s apart so a large transfer doesn't
+		-- flood the net channel (and trip the reliable-channel overflow) in one tick.
 		timer.Simple(k * 0.2, function()
 			net.Start(tag)
 			if SERVER then net.WriteEntity(Entity(0)) end

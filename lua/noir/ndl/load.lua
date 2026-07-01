@@ -2,12 +2,12 @@
 Noir.DebugLib = NDL
 _G.NDL = NDL
 local function printModule(path)
-	local str = Format("| [SH] MODULE: %-17s |", path)
+	local str = Format("| [SH] MODULE: %-22s |", path)
 	print(str)
 end
 
 function NDL.load()
-	print("+-----Loading debug library------+")
+	print("+--------Loading debug library--------+")
 	include("noir/ndl/logging.lua")
 	printModule("ndl/" .. "logging")
 	include("ndl/execution.lua")

@@ -9,6 +9,11 @@ local reload = function(fullReload)
 		if IsValid(Noir.FileBrowser.Frame) then Noir.FileBrowser.Frame:Remove() end
 		if IsValid(Noir.ReplFrame) then Noir.ReplFrame:Remove() end
 		if IsValid(Noir.Dashboard) and IsValid(Noir.Dashboard.Frame) then Noir.Dashboard.Frame:Remove() end
+		if Noir.FileSearch then
+			Noir.FileSearch.CancelAll()
+			if Noir.FileSearch.UI and IsValid(Noir.FileSearch.UI.Frame) then Noir.FileSearch.UI.Frame:Remove() end
+		end
+
 		if Noir.EntitySelector then
 			Noir.EntitySelector.StopPickMode()
 			Noir.EntitySelector.Close()
@@ -48,24 +53,32 @@ end
 
 local function loadModule(path)
 	local namesplit = path:Split("/")
-	local name = table.remove(namesplit):Split(".")[1]
-	local folder = namesplit[#namesplit]
-	local state
-	if folder == "client" then
+	-- Realm is inferred from any "client"/"server" segment in the path, so nested
+	-- folders (e.g. client/editor/frame.lua) resolve correctly, not just the immediate parent.
+	local state = "SH"
+	if table.HasValue(namesplit, "client") then
 		state = "CL"
-	elseif folder == "server" then
+	elseif table.HasValue(namesplit, "server") then
 		if CLIENT then -- Do not try to load server modules on client
 			return
 		end
 
 		state = "SV"
-	else
-		state = "SH"
 	end
 
+	-- Display name = path minus the realm folder, minus extension.
+	-- e.g. "client/editor/sessions.lua" -> "editor/sessions"
+	local nameparts = {}
+	for _, seg in ipairs(namesplit) do
+		if seg ~= "client" and seg ~= "server" then
+			nameparts[#nameparts + 1] = seg
+		end
+	end
+	local name = table.concat(nameparts, "/"):Split(".")[1]
+
 	if SERVER and state ~= "SV" then AddCSLuaFile(path) end
-	if string.len(name) > 17 then name = string.Left(name, 13) .. "..." end
-	local str = Format("| [%s] MODULE: %-17s |", state, name)
+	if string.len(name) > 22 then name = string.Left(name, 19) .. "..." end
+	local str = Format("| [%s] MODULE: %-22s |", state, name)
 	print(str)
 	if state == "CL" and SERVER then return end
 	include(path)
@@ -80,10 +93,10 @@ function Noir.Load()
 	-- Create storage folder if it doesn't exist
 	if CLIENT and not file.Exists(Noir.STORAGE_PATH, "DATA") then file.CreateDir(Noir.STORAGE_PATH) end
 	require("luacheck")
-	print("+--------------------------------+")
-	print("|             -Noir-             |")
-	print("+--------------------------------+")
-	print("|                                |")
+	print("+-------------------------------------+")
+	print("|               -Noir-                |")
+	print("+-------------------------------------+")
+	print("|                                     |")
 	loadModule("logging.lua")
 	loadModule("utils.lua")
 	loadModule("network.lua")
@@ -91,19 +104,29 @@ function Noir.Load()
 	loadModule("output_format.lua")
 	loadModule("search.lua")
 	loadModule("environment.lua")
+	loadModule("filesearch.lua")
 	loadModule("client/autocomplete.lua")
 	loadModule("client/skin.lua")
 	loadModule("client/file_browser.lua")
 	loadModule("client/monaco_panel.lua")
-	loadModule("client/editor.lua")
+	loadModule("client/editor/init.lua")
+	loadModule("client/editor/persistence.lua")
+	loadModule("client/editor/sessions.lua")
+	loadModule("client/editor/console.lua")
+	loadModule("client/editor/tabs.lua")
+	loadModule("client/editor/menus.lua")
+	loadModule("client/editor/sidebar.lua")
+	loadModule("client/editor/run.lua")
+	loadModule("client/editor/frame.lua")
 	loadModule("client/repl.lua")
 	loadModule("client/entity_selector.lua")
 	loadModule("client/dashboard.lua")
+	loadModule("client/filesearch_ui.lua")
 	loadModule("client/autorun.lua")
 	loadModule("ndl/load.lua")
 	NDL.load()
-	print("|                                |")
-	print("+--------Loading complete--------+")
+	print("|                                     |")
+	print("+----------Loading complete-----------+")
 	Noir.Msg("Loaded!\n")
 	-- Register editor settings now that the dashboard module is loaded (editor loads first)
 	if CLIENT and Noir.Editor then Noir.Editor.RegisterDashboard() end

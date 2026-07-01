@@ -37,7 +37,7 @@ function PANEL:Init()
 	addColumn(self.ErrorList, "Line"):SetMaxWidth(25)
 	self.ErrorList.DoDoubleClick = function(_, _, line)
 		if not line.event then return end
-		self:RunJS("gmodinterface.GotoLine(%s)", line.event.line)
+		self:GotoLine(line.event.line)
 	end
 
 	self.StatusButton = self:Add("DButton")
@@ -263,6 +263,10 @@ end
 
 function PANEL:SetSession(sessionName)
 	self:RunJS([[gmodinterface.SetSession("%s")]], sessionName:JavascriptSafe())
+end
+
+function PANEL:GotoLine(line)
+	self:RunJS("gmodinterface.GotoLine(%s)", line)
 end
 
 function PANEL:CreateSession(session)

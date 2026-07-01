@@ -53,7 +53,7 @@ function PANEL:OnSizeChanged(newWidth, newHeight)
 end
 
 function PANEL:Paint(w, h)
-	surface.SetDrawColor(42, 42, 42)
+	surface.SetDrawColor(42, 42, 42, self.PanelAlpha or 255)
 	surface.DrawRect(0, 0, w, h)
 end
 
@@ -122,9 +122,9 @@ function PANEL:SetStatus(text, color, prependTime)
 end
 
 function PANEL:SetAlpha(alpha)
+	self.PanelAlpha = alpha
 	if not self.Ready then return end
-	alpha = alpha / 255
-	self:RunJS([[document.getElementsByTagName("body")[0].style.opacity = %f]], alpha)
+	self:RunJS([[document.getElementsByTagName("body")[0].style.opacity = %f]], alpha / 255)
 end
 
 function PANEL:RunJS(code, ...)
@@ -167,6 +167,8 @@ function PANEL:JS_OnReady()
 	Noir.Editor.RegisterActions(self)
 	self:SetStatus("Ready", Color(0, 150, 0))
 	self.Ready = true
+	-- SetAlpha may have run before the page was ready (JS skipped); apply it now.
+	if self.PanelAlpha then self:SetAlpha(self.PanelAlpha) end
 	-- Flush any text that was buffered before the HTML was ready
 	if self.TextBuffer then
 		for _, text in ipairs(self.TextBuffer) do

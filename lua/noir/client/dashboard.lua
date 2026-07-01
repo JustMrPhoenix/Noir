@@ -379,14 +379,16 @@ function Dashboard.InitializeDefaults(tabName)
 end
 
 -- VGUI
-function Dashboard.Show()
+function Dashboard.Show(tabName)
 	if IsValid(Dashboard.Frame) then
 		Dashboard.Frame:Show()
 		Dashboard.Frame:MakePopup()
-		return
+	else
+		Dashboard.CreateFrame()
 	end
 
-	Dashboard.CreateFrame()
+	-- Tab setup is synchronous, so an optional starting tab can be applied directly.
+	if tabName then Dashboard.SetActiveTab(tabName) end
 end
 
 function Dashboard.Hide()
@@ -909,6 +911,7 @@ function Dashboard.CreateControl(parent, setting, tabName)
 			local ent = Dashboard.Values[setting.fullKey]
 			if IsValid(ent) then
 				Noir.EntitySelector.SetHighlight(ent)
+				-- Genuine delay: flash the highlight for 2s as a preview, then clear it.
 				timer.Simple(2, function() Noir.EntitySelector.StopHighlight() end)
 			end
 		end

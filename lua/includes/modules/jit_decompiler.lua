@@ -265,6 +265,56 @@ local function parse_constants_from_dump(fn)
 		return s
 	end
 
+	-- ULEB128 into a full unsigned 32-bit value (float math keeps it unsigned;
+	-- the bit-based read_uleb128 above breaks past 31 bits).
+	local function read_uleb128_u32()
+		local result, mul = 0, 1
+		repeat
+			local b = read_byte()
+			if not b then return nil end
+			result = result + (b % 128) * mul
+			mul = mul * 128
+		until b < 128
+		return result % 4294967296
+	end
+
+	-- LuaJIT's 33-bit ULEB128 for numeric constants: the low bit of the first
+	-- byte is an isnum flag, so the first byte only contributes 6 value bits.
+	-- Returns (value, isnum).
+	local function read_uleb128_33()
+		local b = read_byte()
+		if not b then return nil end
+		local isnum = b % 2
+		local v = math.floor(b / 2) -- b >> 1
+		if v >= 0x40 then
+			v = v % 0x40 -- keep low 6 bits
+			local mul = 64 -- 2^6
+			repeat
+				local nb = read_byte()
+				if not nb then return nil end
+				v = v + (nb % 128) * mul
+				mul = mul * 128
+			until nb < 128
+		end
+		return v, isnum
+	end
+
+	-- Reconstruct an IEEE-754 double from its two 32-bit words.
+	local function double_from_words(lo, hi)
+		local sign = 1
+		if hi >= 0x80000000 then sign = -1; hi = hi - 0x80000000 end
+		local exponent = math.floor(hi / 0x100000) -- hi >> 20 (11 bits)
+		local mantissa = (hi % 0x100000) * 4294967296 + lo -- 52-bit mantissa
+		if exponent == 0 then
+			if mantissa == 0 then return 0 end
+			return sign * mantissa * 2 ^ -1074 -- subnormal
+		elseif exponent == 2047 then
+			if mantissa == 0 then return sign * math.huge end
+			return 0 / 0 -- NaN
+		end
+		return sign * (1 + mantissa / 4503599627370496) * 2 ^ (exponent - 1023)
+	end
+
 	-- Skip header: ESC 'L' 'J' version flags [name]
 	if read_byte() ~= 0x1b or read_byte() ~= 0x4c or read_byte() ~= 0x4a then return nil end
 	read_byte() -- version
@@ -349,13 +399,16 @@ local function parse_constants_from_dump(fn)
 
 		-- Read numeric constants
 		for i = 0, numkn - 1 do
-			local isnum = read_uleb128()
-			if isnum then
-				if bit.band(isnum, 1) == 0 then
-					proto_consts[i] = bit.rshift(isnum, 1)
-				else
-					proto_consts[i] = read_uleb128()
-				end
+			local lo, isnum = read_uleb128_33()
+			if not lo then break end
+			if isnum == 1 then
+				local hi = read_uleb128_u32()
+				if not hi then break end
+				proto_consts[i] = double_from_words(lo, hi)
+			else
+				-- 32-bit signed integer
+				if lo >= 0x80000000 then lo = lo - 4294967296 end
+				proto_consts[i] = lo
 			end
 		end
 
@@ -745,37 +798,39 @@ namedOutputHandlers[INST.ISTC] = function(ins, ctx) return string.format("if %s 
 namedOutputHandlers[INST.ISFC] = function(ins, ctx) return string.format("if not %s then local_%d = %s; jump", ctx.getSlot(ins.D), ins.A, ctx.getSlot(ins.D)) end
 namedOutputHandlers[INST.IST] = function(ins, ctx) return string.format("if %s then jump", ctx.getSlot(ins.D)) end
 namedOutputHandlers[INST.ISF] = function(ins, ctx) return string.format("if not %s then jump", ctx.getSlot(ins.D)) end
--- Helper to find the correct argument start offset by looking at where args are actually placed
--- Returns the slot offset where real arguments start relative to function slot A
-local function getCallArgOffset(ins, ctx)
-	-- Walk backwards to find the first MOV/KSHORT/etc that sets up an argument
-	-- The slot it writes to tells us where args actually start
-	local checkIdx = ctx.i - 1
-	local firstArgSlot = nil
-	while checkIdx >= 0 do
-		local checkIns = ctx.instructions and ctx.instructions[checkIdx]
-		if not checkIns then break end
-		-- These instructions set up arguments
-		if checkIns.OP_CODE == INST.MOV or checkIns.OP_CODE == INST.KSHORT or checkIns.OP_CODE == INST.KNUM or checkIns.OP_CODE == INST.KSTR or checkIns.OP_CODE == INST.KPRI or checkIns.OP_CODE == INST.CAT then
-			-- Track the lowest slot used for args (they should be contiguous)
-			if not firstArgSlot or checkIns.A < firstArgSlot then firstArgSlot = checkIns.A end
-		elseif checkIns.OP_CODE == INST.TGETS or checkIns.OP_CODE == INST.GGET or checkIns.OP_CODE == INST.UGET then
-			-- Hit the function/table load, stop looking
-			break
-		else
-			-- Hit something else, stop
-			break
+-- LuaJIT GC64 builds (which GMod uses on 64-bit) insert an extra frame-info
+-- slot below every call frame (LJ_FR2). Call arguments therefore begin at
+-- func+1+FR2, not func+1. Detect FR2 by probing a method call: the compiler
+-- emits a MOV that copies self to func+1+FR2, so FR2 = selfSlot - funcSlot - 1.
+local LJ_FR2
+local function getFR2()
+	if LJ_FR2 ~= nil then return LJ_FR2 end
+	LJ_FR2 = 0
+	local probe = function(o) return o:m() end
+	local funcSlot, selfSlot
+	for n = 0, 15 do
+		local ok, ins_raw = pcall(jit.util.funcbc, probe, n)
+		if not ok or not ins_raw then break end
+		local op = bit.band(ins_raw, 0xFF)
+		local a = bit.rshift(bit.band(ins_raw, 0x0000ff00), 8)
+		if op == INST.TGETS then
+			funcSlot = a
+		elseif op == INST.MOV then
+			selfSlot = a
 		end
-
-		checkIdx = checkIdx - 1
 	end
 
-	-- Calculate offset based on where args actually are
-	if firstArgSlot then
-		local offset = firstArgSlot - ins.A
-		if offset >= 1 then return offset end
+	if funcSlot and selfSlot and selfSlot > funcSlot then
+		LJ_FR2 = selfSlot - funcSlot - 1
 	end
-	return 1 -- Default: args start at A+1
+
+	return LJ_FR2
+end
+
+-- Slot offset where real call arguments start relative to the function slot A.
+-- LuaJIT always lays arguments out contiguously at func+1+FR2, func+2+FR2, ...
+local function getCallArgOffset()
+	return 1 + getFR2()
 end
 
 -- Calls
@@ -790,17 +845,22 @@ namedOutputHandlers[INST.CALL] = function(ins, ctx)
 	end
 
 	local argsStr = table.concat(args, ", ")
+	local callExpr = string.format("%s(%s)", funcName, argsStr)
 	if nrets == 0 then
-		return string.format("%s(%s)", funcName, argsStr)
+		return callExpr
 	elseif nrets == 1 then
 		local resultName = string.format("result_%d", ctx.i)
 		ctx.setSlot(ins.A, resultName)
-		return string.format("%s = %s(%s)", resultName, funcName, argsStr)
+		ctx.callExprs[ins.A] = callExpr
+		return string.format("%s = %s", resultName, callExpr)
 	else
 		for j = 0, nrets - 1 do
 			ctx.setSlot(ins.A + j, string.format("result_%d_%d", ctx.i, j))
 		end
-		return string.format("result_%d_0..result_%d_%d = %s(%s)", ctx.i, ctx.i, nrets - 1, funcName, argsStr)
+		-- Remember the call keyed by its base slot so a for-in header can print
+		-- e.g. "pairs(t)" instead of the three result_N iterator slots.
+		ctx.callExprs[ins.A] = callExpr
+		return string.format("result_%d_0..result_%d_%d = %s", ctx.i, ctx.i, nrets - 1, callExpr)
 	end
 end
 
@@ -868,8 +928,57 @@ end
 namedOutputHandlers[INST.ITERL] = handleIterEnd
 namedOutputHandlers[INST.IITERL] = handleIterEnd
 namedOutputHandlers[INST.JITERL] = handleIterEnd
+-- Number of loop variables an ITERC/ITERN produces (B = nresults + 1).
+local function iterVarCount(ins)
+	local n = ins.B - 1
+	if n < 1 then return 2 end -- generic fallback (for k, v)
+	return n
+end
+
+-- Display name for a for-in loop variable. Stripped bytecode has no real names,
+-- so use the conventional key/value naming (first var "k", the rest "v"), with
+-- the slot suffixed so nested loops that reuse k/v stay unambiguous.
+local function iterVarName(slot, index)
+	return (index == 0 and "k" or "v") .. "_" .. slot
+end
+
+-- Render a for-in loop header ("for k, v in iter do") at the loop entry and
+-- name the loop-var slots. The body is disassembled before the ITERC/ITERN that
+-- defines these slots (the entry jump skips forward to it), so naming here is
+-- what lets the body reference the vars by name instead of raw rN. Returns nil
+-- when targetIdx isn't an iterator, i.e. this is an ordinary jump.
+local function loopHeader(ctx, targetIdx)
+	local target = ctx.instructions and ctx.instructions[targetIdx]
+	if not (target and (target.OP_CODE == INST.ITERC or target.OP_CODE == INST.ITERN)) then return nil end
+	local vars = {}
+	for j = 0, iterVarCount(target) - 1 do
+		local name = iterVarName(target.A + j, j)
+		ctx.setSlot(target.A + j, name)
+		table.insert(vars, name)
+	end
+
+	-- The iterator triplet (func, state, control) sits just below the loop vars.
+	-- Prefer the original call that produced it (e.g. "pairs(t)"); fall back to
+	-- the three raw slots when that call wasn't a single tracked expression.
+	local a = target.A
+	local src = ctx.callExprs and ctx.callExprs[a - 3]
+	if not src then src = string.format("%s, %s, %s", ctx.getSlot(a - 3), ctx.getSlot(a - 2), ctx.getSlot(a - 1)) end
+	return string.format("for %s in %s do", table.concat(vars, ", "), src)
+end
+
 local function handleIterCall(ins, ctx)
-	return string.format("local_%d, ... = %s(%s, %s)", ins.A, ctx.getSlot(ins.A - 3), ctx.getSlot(ins.A - 2), ctx.getSlot(ins.A - 1))
+	-- If the loop entry (ISNEXT) already rendered the header and named the vars,
+	-- this instruction is just the advance/loop-back point.
+	if ctx.getSlot(ins.A) ~= string.format("r%d", ins.A) then return "-- next iteration" end
+	-- Fallback (entry not recognized): show the raw iterator advance.
+	local vars = {}
+	for j = 0, iterVarCount(ins) - 1 do
+		local name = iterVarName(ins.A + j, j)
+		ctx.setSlot(ins.A + j, name)
+		table.insert(vars, name)
+	end
+
+	return string.format("%s = %s(%s, %s)", table.concat(vars, ", "), ctx.getSlot(ins.A - 3), ctx.getSlot(ins.A - 2), ctx.getSlot(ins.A - 1))
 end
 
 namedOutputHandlers[INST.ITERC] = handleIterCall
@@ -881,7 +990,9 @@ end
 namedOutputHandlers[INST.LOOP] = handleLoop
 namedOutputHandlers[INST.ILOOP] = handleLoop
 namedOutputHandlers[INST.JLOOP] = handleLoop
-namedOutputHandlers[INST.ISNEXT] = function() return "-- verify ITERN" end
+namedOutputHandlers[INST.ISNEXT] = function(ins, ctx)
+	return loopHeader(ctx, ins.D) or "-- verify ITERN"
+end
 -- Jump
 namedOutputHandlers[INST.JMP] = function(ins) return string.format("goto %d", ins.D) end
 -- Closure
@@ -906,6 +1017,9 @@ end
 -- Generate human-readable decompiled output with upvalues visible
 local function generate_named_output(data, formatter)
 	local slotNames = {}
+	-- Call expression that last wrote each slot (e.g. "pairs(t)"), so a for-in
+	-- header can show the source call instead of its opaque result_N slots.
+	local callExprs = {}
 	local output = {}
 	local consts = data.consts
 	local upvalues = data.upvalues
@@ -919,6 +1033,7 @@ local function generate_named_output(data, formatter)
 
 	local function setSlot(idx, name)
 		slotNames[idx] = name
+		callExprs[idx] = nil -- stale once the slot is rewritten by anything else
 	end
 
 	-- Initialize parameter names immediately (before processing any instructions)
@@ -970,6 +1085,7 @@ local function generate_named_output(data, formatter)
 	local ctx = {
 		getSlot = getSlot,
 		setSlot = setSlot,
+		callExprs = callExprs,
 		consts = consts,
 		upvalues = upvalues,
 		info = info,
