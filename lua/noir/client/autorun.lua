@@ -403,7 +403,8 @@ end
 
 -- Initialize
 Autorun.Load()
--- Register dashboard immediately (Dashboard.Load() is already called by dashboard.lua)
-Autorun.RegisterDashboard()
+-- Dashboard registration is deferred to Noir.Load() so all native tabs
+-- (FileSearch, Editor, Output) register before the Autorun tab, and any
+-- tabs registered by autorun scripts land after all of Noir's own tabs.
 -- Clear running flag on clean shutdown
 hook.Add("ShutDown", "NoirAutorunShutdown", function() if Autorun.Running then Autorun.MarkCompleted() end end)

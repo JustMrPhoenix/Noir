@@ -31,6 +31,11 @@ function Editor.RegisterActions(panel)
 		panel:AddAction("switchToTab" .. i, "Switch to tab " .. i, function() Editor.Tab.SwitchTo(i) end, "Mod.Alt | Key.Digit" .. i)
 	end
 
+	-- Only meaningful on REPL/console panels (guarded by capability so it's a no-op
+	-- on the Monaco editor panel, which shares this action registration).
+	panel:AddAction("replSwitchJS", "Console: Switch to JavaScript", function(p)
+		if p.SwitchLanguage then p:SwitchLanguage("javascript") end
+	end, "Mod.CtrlCmd | Mod.Alt | Key.KeyJ")
 	panel:AddAction("newConsole", "Noir: New Console Tab", function()
 		local session = Editor.Console.CreateTab()
 		Editor.Tab.SetActive(session.name)
@@ -90,6 +95,24 @@ function Editor.RegisterDashboard()
 					value = "GAME"
 				}
 			}
+		},
+		{
+			key = "replHistoryPersist",
+			type = "bool",
+			label = "Remember REPL history",
+			description = "Save console/REPL command history between sessions. Lua and JavaScript keep separate histories.",
+			category = "REPL",
+			default = true
+		},
+		{
+			key = "replHistoryLimit",
+			type = "number",
+			label = "Max history entries",
+			description = "How many past commands to keep per language. Oldest entries are dropped once the limit is reached.",
+			category = "REPL",
+			default = 100,
+			min = 1,
+			max = 10000
 		}
 	}, {
 		icon = "icon16/application_side_tree.png",
@@ -100,14 +123,19 @@ function Editor.RegisterDashboard()
 	local function refresh() Editor.Sidebar.NavigateToActive(true) end
 	Noir.Dashboard.OnChange("Editor", "sidebarFollowFile", refresh)
 	Noir.Dashboard.OnChange("Editor", "sidebarDefaultPath", refresh)
+	-- Trim stored history right away when the cap is lowered.
+	Noir.Dashboard.OnChange("Editor", "replHistoryLimit", function() Editor.Storage.TrimReplHistory() end)
 	Editor.DashboardRegistered = true
 end
 
 concommand.Add("noir_clearconfig", function()
-	Editor.Config = {}
-	Editor.Sessions = {}
 	file.Delete(Noir.STORAGE_PATH .. "config.json")
 	file.Delete(Noir.STORAGE_PATH .. "sessions.json")
+	file.Delete(Noir.STORAGE_PATH .. "dashboard.json")
+	file.Delete(Noir.STORAGE_PATH .. "autorun.json")
+	Editor.Config = nil
+	Editor.Sessions = {}
+	Editor.SessionsByName = {}
 	Noir.Reload()
 end)
 

@@ -6,6 +6,16 @@ function Editor.Run.Code(target)
 	if Editor.ActiveSession and Editor.ActiveSession.sessionType == "console" then return end
 	Editor.Run.LastTarget = target
 	Editor.Storage.QueueSave()
+	-- JS tabs run in the editor's own DHTML (JS is local-only, so `target` is
+	-- ignored); no network transfer. Noir.BuildJSEditorRun swaps in the original
+	-- console for the run so output prints plainly to the game console instead of
+	-- going through the Editor's "[Editor]"-prefixed console overrides.
+	-- Call RunJavascript directly since PANEL:RunJS would Format() the snippet.
+	if Editor.ActiveSession and Editor.ActiveSession.language == "javascript" then
+		Editor.MonacoPanel.HTMLPanel:RunJavascript(Noir.BuildJSEditorRun(Editor.ActiveSession.code))
+		Editor.MonacoPanel:SetStatus("Ran as JavaScript (output in game console)", Color(0, 150, 0), true)
+		return
+	end
 	local targets
 	if target == "clients" then
 		targets = #player.GetHumans()

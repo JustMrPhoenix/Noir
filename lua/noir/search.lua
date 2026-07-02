@@ -17,8 +17,11 @@ Noir.Search = Search
 local function compare(a, b)
 	if a == b then return true end
 	if a:find(b, nil, true) then return true end
-	if a:lower() == b:lower() then return true end
-	if a:lower():find(b:lower(), nil, true) then return true end
+	-- Case-insensitive pass. Utils.UTF8Lower folds ASCII *and* the UTF8 letters in
+	-- its table, so non-ASCII nicks match without needing GLib.
+	local la, lb = Noir.Utils.UTF8Lower(a), Noir.Utils.UTF8Lower(b)
+	if la == lb then return true end
+	if la:find(lb, nil, true) then return true end
 	return false
 end
 

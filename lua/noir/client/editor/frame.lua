@@ -252,8 +252,7 @@ function Editor.UI.CreateFrame()
 	monaco:DockMargin(0, 0, -5, -5)
 	monaco:Dock(FILL)
 	Editor.MonacoPanel = monaco
-	-- A hack to make space for resizing
-	monaco.StatusButton:DockMargin(0, 0, 14, 0)
+	monaco.StatusButton:DockMargin(0, 0, 108, 0)
 	monaco.ErrorList:DockMargin(0, 0, 14, 0)
 	monaco:SetCursor("sizenwse")
 	-- REPL panels are now created per-console in Editor.Console.CreateTab()
@@ -293,6 +292,9 @@ function Editor.UI.CreateFrame()
 				replPanel:SetVisible(false)
 				replPanel:SetCursor("sizenwse")
 				session.ReplPanel = replPanel
+				replPanel.IsMainConsole = session.isMainConsole or false
+				replPanel.Session = session
+				Editor.Console.ApplySessionLanguage(replPanel, session)
 				replPanel.OnMousePressed = function(_, ...)
 					if frame.Maximized then return end
 					frame:OnMousePressed(...)
@@ -340,9 +342,13 @@ function Editor.UI.CreateFrame()
 	monaco.OnSessionSet = function(_, session)
 		if not monaco.Ready then return end
 		if session.name == "Unnamed" then
-			Noir.Error("Something went wrong, creating an empty session\n")
-			Editor.Session.Create()
+			local consoleActive = Editor.ActiveSession and Editor.ActiveSession.sessionType == "console"
+			if not consoleActive then Noir.Error("Something went wrong, creating an empty session\n") end
+			local created = Editor.Session.Create()
+			if consoleActive and created then Editor.Tab.SuppressActivate = created.name end
 			monaco:CloseSession("Unnamed")
+		elseif Editor.Tab.SuppressActivate == session.name then
+			Editor.Tab.SuppressActivate = nil
 		else
 			Editor.Tab.SetActive(session.name, true)
 		end
@@ -350,6 +356,9 @@ function Editor.UI.CreateFrame()
 
 	monaco.OnCode = function(_, code)
 		if not Editor.ActiveSession then return end
+		-- Monaco is hidden while a console tab is active; anything arriving here is
+		-- a background model swap, not a user edit -- don't clobber the console session.
+		if Editor.ActiveSession.sessionType == "console" then return end
 		local modified = Editor.ActiveSession.SavedCode ~= code
 		Editor.ActiveSession.code = code
 		Editor.ActiveSession.Modified = modified
@@ -358,7 +367,10 @@ function Editor.UI.CreateFrame()
 	end
 
 	monaco.HTMLPanel.OnFocusChanged = function(_, hasFocus) Editor.SetFocusAlpha(hasFocus) end
-	monaco.OnOpenURL = function(_, url) gui.OpenURL(url) end
+	monaco.OnOpenURL = function(_, url)
+		if Editor.OpenFileURL(url) then return end
+		gui.OpenURL(url)
+	end
 	monaco.OnValidation = function() Editor.Run.UpdateCOH() end
 	frame.OnFocusChanged = function(_, hasFocus)
 		Editor.Config.editorSize = {frame:GetSize()}

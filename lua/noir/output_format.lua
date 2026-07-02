@@ -19,6 +19,20 @@ local blacklistedTypes = {
 	["proto"] = true
 }
 
+function Format.GetIterator(opts)
+	local mode = istable(opts) and opts.sortMode
+	if mode == "SortedPairs" then
+		return SortedPairs
+	elseif mode == "SortedPairsByValue" then
+		return SortedPairsByValue
+	end
+	return pairs
+end
+
+local function formatSource(shortSrc, lineStart, lineEnd)
+	return fmt("@%s:%d-%d", shortSrc, lineStart, lineEnd)
+end
+
 local function getlocals(func)
 	local locals = {}
 	local names_only = {}
@@ -68,7 +82,7 @@ function Format.DecompileFunc(func, level, doFull)
 	return fmt(
 		"function(%s) -- %p\n%s-- upvalues: %s%s\n%send",
 		args_str, func, levelIndent .. "    ", upvalStr, insruction_string, levelIndent
-	), fmt("%s[%d-%d]", debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
+	), formatSource(debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
 end
 
 function Format.FormatShort(val)
@@ -114,7 +128,7 @@ function Format.FormatShort(val)
 					args_str = table.concat(args, ",")
 				end
 				return fmt("func:%p(%s)", val, args_str),
-					fmt("%s[%d-%d]", debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
+					formatSource(debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
 			end
 		else
 			return tostring(val)
@@ -288,14 +302,12 @@ function Format.FormatLong(val, level, opts, doneTbls)
 			return fmt("cfunc:%p", val)
 		else
 			local fullpath = debugInfo.short_src
+			local sourceRef = formatSource(debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
 			local info
 			if debugInfo.source ~= "@" .. debugInfo.short_src then
-				info = fmt(
-					"%s\n%s-- %s\n%s-- %d-%d",
-					debugInfo.source, levelIndent, debugInfo.short_src, levelIndent, debugInfo.linedefined, debugInfo.lastlinedefined
-				)
+				info = fmt("%s\n%s-- %s", debugInfo.source, levelIndent, sourceRef)
 			else
-				info = fmt("%s:%d-%d", debugInfo.source, debugInfo.linedefined, debugInfo.lastlinedefined)
+				info = sourceRef
 			end
 
 			if file.Exists(fullpath, "GAME") then
@@ -329,7 +341,7 @@ function Format.FormatLong(val, level, opts, doneTbls)
 	-- Handle --keys option: output only keys
 	if opts.keys and level == 0 then
 		local keys = {}
-		for k, _ in pairs(val) do
+		for k, _ in Format.GetIterator(opts)(val) do
 			local str = Format.FormatShort(k)
 			table.insert(keys, str)
 		end
@@ -339,7 +351,7 @@ function Format.FormatLong(val, level, opts, doneTbls)
 	-- Handle --values option: output only values
 	if opts.values and level == 0 then
 		local values = {}
-		for _, v in pairs(val) do
+		for _, v in Format.GetIterator(opts)(val) do
 			local str = Format.FormatShort(v)
 			table.insert(values, str)
 		end
@@ -352,7 +364,7 @@ function Format.FormatLong(val, level, opts, doneTbls)
 	-- For --shallow, we expand the top level but use short format for nested tables
 	-- For --depth, we expand like --full but limited to the specified depth
 	local shouldExpand = doFull or opts.shallow or opts.depth
-	for k, v in pairs(val) do
+	for k, v in Format.GetIterator(opts)(val) do
 		done = done + 1
 		if done > 100 and not doFull and not opts.depth and not opts.shallow then
 			result = fmt("%s\n%s-- %s more...", result, string.rep(" ", (level + 1) * 4), total - done)
@@ -433,7 +445,7 @@ function Format.FormatMessage(message, messageData, displayFull)
 		end
 	else
 		local lines = {}
-		for k, v in pairs(messageData) do
+		for k, v in Format.GetIterator(displayFull)(messageData) do
 			local formated, cmt = Format.FormatLong(v, 0, displayFull)
 			if string.find(formated, "\n") then formated = "\n" .. formated .. "-- " .. (cmt or "") end
 			table.insert(lines, fmt("-- %s : %s", k, formated))
@@ -442,4 +454,28 @@ function Format.FormatMessage(message, messageData, displayFull)
 		text = table.concat(lines, "\n")
 	end
 	return text == "" and "nil" or text
+end
+
+function Format.RegisterDashboard()
+	if not Noir.Dashboard then return end
+	if Format.DashboardRegistered then Noir.Dashboard.Unregister("Output") end
+	Noir.Dashboard.Register("Output", {
+		{
+			key = "tableSort",
+			type = "dropdown",
+			label = "Table sort order",
+			description = "How table contents are ordered when formatting output.",
+			category = "Formatting",
+			default = "pairs",
+			options = {
+				{label = "Unsorted (pairs)", value = "pairs"},
+				{label = "Sorted by key (SortedPairs)", value = "SortedPairs"},
+				{label = "Sorted by value (SortedPairsByValue)", value = "SortedPairsByValue"}
+			}
+		}
+	}, {
+		icon = "icon16/text_align_left.png",
+		description = "Output formatting settings"
+	})
+	Format.DashboardRegistered = true
 end

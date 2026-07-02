@@ -678,4 +678,5 @@ end
 
 concommand.Add("noir_showsearch", function() UI.Show() end, nil, "Open the Noir Find in Files window")
 
-UI.RegisterDashboard()
+-- Dashboard registration is deferred to Noir.Load() so all native tabs
+-- register in a deterministic order before autorun scripts run.

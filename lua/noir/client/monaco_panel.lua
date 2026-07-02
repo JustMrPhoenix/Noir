@@ -10,6 +10,20 @@ keybind.ctrlKey = true;
 keybind.shiftKey = true;
 keybind.keyCode = 46; //monaco.KeyCode.KeyP
 editor._standaloneKeybindingService.updateResolver();]]
+
+local LANGUAGE_CHOICES = {
+	{"Lua", "glua"},
+	{"JS", "javascript"},
+	{"JSON", "json"},
+	{"HTML", "html"},
+	{"CSS", "css"},
+	{"SQLite", "sql"}
+}
+local LANGUAGE_LABELS = {}
+for _, choice in ipairs(LANGUAGE_CHOICES) do
+	LANGUAGE_LABELS[choice[2]] = choice[1]
+end
+local LANGUAGE_COMBO_WIDTH = 90
 local function addColumn(listView, name)
 	local column = listView:AddColumn(name)
 	column.Header.BackgroundColor = Color(40, 40, 40)
@@ -52,6 +66,24 @@ function PANEL:Init()
 		self:SetupHTML()
 	end
 
+	-- Bottom-right language selector. Positioned in OnSizeChanged (like the REPL's
+	-- target combobox) so it sits over the status bar's right edge without fighting
+	-- the docked layout.
+	local langCombo = self:Add("DComboBox")
+	langCombo:SetSkin("Noir")
+	langCombo:SetTextColor(Color(200, 200, 200))
+	langCombo:SetSortItems(false)
+	for _, choice in ipairs(LANGUAGE_CHOICES) do
+		langCombo:AddChoice(choice[1], choice[2])
+	end
+
+	langCombo:SetValue("Lua")
+	self.LanguageCombo = langCombo
+	langCombo.OnSelect = function(_, _, _, langId)
+		if self.SuppressLangSelect then return end
+		self:SetLanguage(langId)
+	end
+
 	self.Language = "glua"
 	self.LanguageData = {}
 	self.Code = ""
@@ -60,11 +92,44 @@ function PANEL:Init()
 	self.Actions = {}
 	self.LastReportEvents = {}
 	self.Ready = false
+	self.LoadingAngle = 0
 end
 
 function PANEL:RequestFocus()
 	self.HTMLPanel:RequestFocus()
 	if self.Ready then self:RunJS("if (window.editor) editor.focus();") end
+end
+
+function PANEL:OnSizeChanged(w, h)
+	if not IsValid(self.LanguageCombo) then return end
+	self.LanguageCombo:SetSize(LANGUAGE_COMBO_WIDTH, 20)
+	self.LanguageCombo:SetPos(w - LANGUAGE_COMBO_WIDTH - 14, h - 20)
+end
+
+-- Change the active editor session's language via the bottom-right selector.
+-- glua enables luacheck validation; other languages skip it (see ValidateCode).
+-- The choice is persisted on the session so it survives reloads.
+function PANEL:SetLanguage(langId)
+	local session = Noir.Editor.ActiveSession
+	if not session or session.sessionType == "console" then return end
+	self:RunJS("gmodinterface.SetLanguage(%q)", langId)
+	self.Language = langId
+	self.LanguageData = {}
+	for _, v in pairs(self.avaliableLaungages or {}) do
+		if v.id == langId then self.LanguageData = v end
+	end
+
+	session.language = langId
+	Noir.Editor.Storage.QueueSave()
+	self:ValidateCode()
+end
+
+-- Reflect a session's language in the selector without triggering OnSelect.
+function PANEL:UpdateLanguageCombo(langId)
+	if not IsValid(self.LanguageCombo) then return end
+	self.SuppressLangSelect = true
+	self.LanguageCombo:SetValue(LANGUAGE_LABELS[langId] or langId or "Lua")
+	self.SuppressLangSelect = false
 end
 
 function PANEL:SetStatus(text, color, prependTime)
@@ -198,6 +263,10 @@ end
 function PANEL:JS_OnReady()
 	self:RunJS(Noir.Autocomplete.GetJSWithState("Client"))
 	self:RunJS(self.CUSTOM_JS)
+	-- Monaco only turns a `@path/to/file.lua` reference into a clickable link once
+	-- it has asked us (via OnFileExistsRequest) whether the file exists; answers
+	-- are cached JS-side. See ProvideFileExists / ClearFileExistsCache.
+	self:RunJS("gmodinterface.EnableLinkValidation()")
 	self:SetStatus("Ready", Color(0, 150, 0))
 	self.Ready = true
 	self.StatusButton.DoClick = function() self:ToggleErrorList() end
@@ -214,6 +283,43 @@ function PANEL:Think()
 	-- Wait for user to stop editing and then validate
 	if self.SHOULD_VALIDATE and self.LastEdit + self.VALIDATE_COOLDOWN < CurTime() and self.LastValidated < self.LastEdit then
 		self:ValidateCode()
+	end
+end
+
+function PANEL:PaintOver(w, h)
+	if self.Ready then return end
+	local cx, cy = w / 2, (h - 20) / 2
+	local radius = math.max(16, math.min(w, h) * 0.05)
+	local thickness = math.max(2, radius * 0.16)
+	local segments = 64
+	local arcSpan = 140 -- degrees of the bright sweeping arc
+	self.LoadingAngle = (self.LoadingAngle or 0) + RealFrameTime() * 220
+	local head = self.LoadingAngle % 360
+	local rOuter, rInner = radius + thickness / 2, radius - thickness / 2
+	draw.NoTexture()
+	for i = 0, segments - 1 do
+		local a1 = (i / segments) * math.pi * 2
+		local a2 = ((i + 1) / segments) * math.pi * 2
+		local aDeg = (i / segments) * 360
+		-- Distance behind the rotating head, wrapping around.
+		local d = (head - aDeg + 360) % 360
+		local alpha
+		if d < arcSpan then
+			alpha = 255 * (1 - d / arcSpan)
+		else
+			alpha = 28 -- faint track
+		end
+
+		local cos1, sin1 = math.cos(a1), math.sin(a1)
+		local cos2, sin2 = math.cos(a2), math.sin(a2)
+		local poly = {
+			{ x = cx + rOuter * cos1, y = cy + rOuter * sin1 },
+			{ x = cx + rOuter * cos2, y = cy + rOuter * sin2 },
+			{ x = cx + rInner * cos2, y = cy + rInner * sin2 },
+			{ x = cx + rInner * cos1, y = cy + rInner * sin1 },
+		}
+		surface.SetDrawColor(204, 204, 204, alpha)
+		surface.DrawPoly(poly)
 	end
 end
 
@@ -300,12 +406,30 @@ function PANEL:JS_OnSessionSet(session)
 		end
 	end
 
+	self:UpdateLanguageCombo(session.language)
 	if self.OnSessionSet then self:OnSessionSet(session) end
 	self:JS_OnCode(session.code)
 end
 
 function PANEL:JS_OnLanguages(_, languages)
 	self.avaliableLaungages = languages
+end
+
+-- Monaco asks whether a file reference points at a real file; answer async so it
+-- can decide whether to make the reference clickable.
+function PANEL:JS_OnFileExistsRequest(path, requestId)
+	self:ProvideFileExists(requestId, Noir.Utils.FileReadable("GAME", path))
+end
+
+function PANEL:ProvideFileExists(requestId, exists)
+	self:RunJS("gmodinterface.ProvideFileExists(%d, %s)", requestId, exists and "true" or "false")
+end
+
+-- Drop the JS-side existence cache after files are created/deleted so stale
+-- "missing" answers don't keep valid references un-clickable.
+function PANEL:ClearFileExistsCache()
+	if not self.Ready then return end
+	self:RunJS("gmodinterface.ClearFileExistsCache()")
 end
 
 function PANEL:JS_OnThemesLoaded()
@@ -320,6 +444,8 @@ end
 
 function PANEL:SetupHTML()
 	self.HTMLPanel:OpenURL(self.URL)
+	self.HTMLPanel:RunJavascript([[window.__noirOrigConsole = { log: console.log, warn: console.warn, debug: console.debug, error: console.error };]])
+	self.HTMLPanel:RunJavascript(Noir.JSRuntime)
 	self:AddJSCallback("OnReady")
 	self.HTMLPanel:AddFunction("console", "log", function(...)
 		Noir.Debug("console.log", ...)
@@ -350,6 +476,7 @@ function PANEL:SetupHTML()
 	self:AddJSCallback("OnSessionSet")
 	self:AddJSCallback("OnLanguages")
 	self:AddJSCallback("OnThemesLoaded")
+	self:AddJSCallback("OnFileExistsRequest")
 end
 
 vgui.Register("NoirMonacoEditor", PANEL, "EditablePanel")

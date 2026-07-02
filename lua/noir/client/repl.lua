@@ -46,6 +46,8 @@ function PANEL:Init()
 	self.Target = "self"
 	self.ReplCounter = 0
 	self.Actions = {}
+	self.Language = "glua"
+	self.HasOutput = false
 end
 
 function PANEL:OnSizeChanged(newWidth, newHeight)
@@ -79,6 +81,18 @@ function PANEL:FillMenu()
 
 	self:AddRunOption("Run on clients", "clients", "icon16/group.png")
 	self:AddRunOption("Run on shared", "shared", "icon16/world.png")
+	-- Language switching sits apart from the run targets: it changes what the
+	-- console evaluates (Lua vs JS), not where Lua runs.
+	runMenu:AddSpacer()
+	if self.Language == "javascript" then
+		local luaOption = runMenu:AddOption("Switch to Lua", function() self:SwitchLanguage("glua") end)
+		luaOption:SetIcon("icon16/page_white_text.png")
+		luaOption:SetTextColor(Color(200, 200, 200))
+	else
+		local jsOption = runMenu:AddOption("Switch to JavaScript", function() self:SwitchLanguage("javascript") end)
+		jsOption:SetIcon("icon16/script_code.png")
+		jsOption:SetTextColor(Color(200, 200, 200))
+	end
 end
 
 function PANEL:AddRunOption(label, target, icon, menu)
@@ -107,6 +121,96 @@ function PANEL:UpdateRunOnSubmenu()
 	for _, v in pairs(player.GetHumans()) do
 		self:AddRunOption(v:Nick(), v, v:IsSuperAdmin() and "icon16/user_suit.png" or "icon16/user.png", self.RunOnSubmenu)
 	end
+end
+
+function PANEL:SwitchLanguage(langId)
+	if self.Language == langId then return end
+	if self.IsMainConsole and langId ~= "glua" then
+		Derma_Message(
+			"The Main Console stays in Lua so it can display script output.\nOpen a new console (Ctrl+Shift+`) to use JavaScript.",
+			"Main Console", "Ok"
+		):SetSkin("Noir")
+		return
+	end
+
+	local function apply()
+		self:RunJS("replinterface.Reset()")
+		self.Language = langId
+		self.HasOutput = false
+		self:RunJS("replinterface.SetLanguage(%q)", langId)
+		-- Each language keeps its own history; swap to the new language's entries.
+		self:LoadHistory(langId)
+		-- Autocomplete data is GLua-specific; drop it for JS and restore it for Lua.
+		self:RunJS("replinterface.ResetAutocompletion()")
+		if langId == "glua" then
+			if self.Target == "server" then
+				self:RunJS("replinterface.LoadAutocompleteState(\"Server\")")
+			elseif self.Target == "shared" then
+				self:RunJS(Noir.Autocomplete.GetJSWithState("Shared", "replinterface"))
+			else
+				self:RunJS(Noir.Autocomplete.GetJSWithState("Client", "replinterface"))
+			end
+		end
+
+		if self.Session then
+			self.Session.language = langId
+			Noir.Editor.Storage.QueueSave()
+		end
+	end
+
+	if self.HasOutput then
+		Derma_Query(
+			"Switching language clears this console. Continue?", "Switch language?",
+			"Switch", apply, "Cancel", function() end
+		):SetSkin("Noir")
+	else
+		apply()
+	end
+end
+
+function PANEL:RunJSCode(code)
+	local identifier = "Noir.repl" .. self.ReplCounter
+	self.ReplCounter = self.ReplCounter + 1
+	self.HTMLPanel:RunJavascript(Noir.BuildJSEval(identifier, code, true))
+	self:UpdateCOH()
+end
+
+-- Mirror the Lua REPL's `--[[identifier: type]] value` output format so JS runs read
+-- the same way, including which run produced each console.log/warn/error line.
+function PANEL:JS_OnJSResult(identifier, kind, text)
+	-- A JS eval emits exactly one terminal result ("return" on success, uppercase
+	-- "ERROR" on throw); console.log/warn/error ("error" lowercase) are interim
+	-- output. Only the terminal result is the answer that closes the input's fold.
+	local isRunResult = kind == "return" or kind == "ERROR"
+	if kind == "return" then
+		self:SetStatus("Ran (JS)", Color(0, 150, 0), true)
+		self:UpdateCOH()
+		-- Nothing to display for an undefined result, but still close the fold once.
+		if text == "undefined" then return self:AppendAnswer("") end
+	elseif kind == "ERROR" or kind == "error" then
+		self:SetStatus("Error (JS)", Color(150, 0, 0), true)
+	end
+
+	if string.find(text, "\n") then text = "\n" .. text end
+	-- JS console pane -- use a JS block comment for the label, not Lua's --[[ ]].
+	local formatted = Format("/* %-13s: %s */ %s", identifier, kind, text)
+	if isRunResult then
+		self:AppendAnswer(formatted)
+	else
+		self:AppendText(formatted)
+	end
+end
+
+-- Push the persisted, per-language command history into the frontend so Up/Arrow
+-- and reverse-search see prior sessions' commands. Guarded so it's a no-op on
+-- older frontend builds that lack SetHistory.
+function PANEL:LoadHistory(language)
+	if not self.Ready then return end
+	local history = Noir.Editor.Storage.GetReplHistory(language or self.Language)
+	-- util.TableToJSON encodes an empty table as `{}` (an object); force `[]` so the
+	-- frontend's array indexing stays valid when there's no history yet.
+	local json = #history > 0 and util.TableToJSON(history) or "[]"
+	self:RunJS("if (window.replinterface && replinterface.SetHistory) replinterface.SetHistory(%s)", json)
 end
 
 function PANEL:RequestFocus()
@@ -164,15 +268,19 @@ end
 
 function PANEL:JS_OnReady()
 	self:RunJS(Noir.Autocomplete.GetJSWithState("Client", "replinterface"))
+	-- Turn `@path/to/file.lua` references in REPL output into clickable links, but
+	-- only once we confirm each file exists (OnFileExistsRequest, cached JS-side).
+	self:RunJS("replinterface.EnableLinkValidation()")
 	Noir.Editor.RegisterActions(self)
 	self:SetStatus("Ready", Color(0, 150, 0))
 	self.Ready = true
+	self:LoadHistory()
 	-- SetAlpha may have run before the page was ready (JS skipped); apply it now.
 	if self.PanelAlpha then self:SetAlpha(self.PanelAlpha) end
 	-- Flush any text that was buffered before the HTML was ready
 	if self.TextBuffer then
-		for _, text in ipairs(self.TextBuffer) do
-			self:RunJS("replinterface.AddText(\"%s\")", text:JavascriptSafe())
+		for _, entry in ipairs(self.TextBuffer) do
+			self:RunJS("replinterface.AddText(\"%s\", %s)", entry.text:JavascriptSafe(), entry.isReplAnswer and "true" or "false")
 		end
 
 		self.TextBuffer = nil
@@ -185,6 +293,12 @@ function PANEL:JS_OnReady()
 end
 
 function PANEL:OnCode(code)
+	-- Each submission opens one fold on the frontend; its result closes it.
+	self.AnswerPending = true
+	-- Persist the raw submission (before any `return` rewrite) so it can be
+	-- restored into the history of the matching language next session.
+	Noir.Editor.Storage.AddReplHistory(self.Language, code)
+	if self.Language == "javascript" then return self:RunJSCode(code) end
 	local returnCode = "return " .. code
 	local returnCompile = CompileString(returnCode, "Noir.replValidation", false)
 	if isfunction(returnCompile) then code = returnCode end
@@ -200,7 +314,7 @@ function PANEL:OnCode(code)
 	local id = Noir.Network.GenerateTransferId()
 	self.ReplCounter = self.ReplCounter + 1
 	if not id then
-		Editor.MonacoPanel:SetStatus("Could not send code! See console for details", Color(150, 0, 0))
+		Noir.Editor.MonacoPanel:SetStatus("Could not send code! See console for details", Color(150, 0, 0))
 		return
 	end
 
@@ -215,7 +329,8 @@ function PANEL:OnCode(code)
 	local succ, err = pcall(Noir.SendCode, code, identifier, self.Target, id)
 	if not succ then
 		self:SetStatus(Format("Error: %s", err), Color(150, 0, 0), true)
-		self:AppendText(Format("--[[Could not run code: %s]]", err))
+		-- No run result will arrive; this failure is the command's answer.
+		self:AppendAnswer(Format("--[[Could not run code: %s]]", err))
 	end
 
 	self:UpdateCOH()
@@ -233,7 +348,7 @@ function PANEL:OnRunResult(identifier, sender, transferId, results)
 		if CLIENT and sender == LocalPlayer() then
 			self:SetStatus(Format("Error:%s", msg or returns), Color(150, 0, 0), true)
 		else
-			Editor.MonacoPanel:SetStatus(Format("[%s] Error:%s", senderName, msg), Color(150, 0, 0), true)
+			Noir.Editor.MonacoPanel:SetStatus(Format("[%s] Error:%s", senderName, msg), Color(150, 0, 0), true)
 		end
 	elseif not self.hasError then
 		if self.targets ~= 1 then
@@ -247,39 +362,58 @@ function PANEL:OnRunResult(identifier, sender, transferId, results)
 end
 
 function PANEL:OnMessage(target, replName, sender, transferId, message, messageBody)
-	if message == "run" then
+	local isRunResult = message == "run"
+	if isRunResult then
 		local runResults = util.JSONToTable(messageBody)
 		self:OnRunResult(replName, sender, transferId, runResults)
-		if runResults[1] == false then
-			message = "ERROR"
-			messageBody = runResults[2]
-		else
-			message = "return"
-			messageBody = runResults[2]
-		end
+		message = runResults[1] == false and "ERROR" or "return"
+		messageBody = runResults[2]
 	end
 
 	if string.find(messageBody, "\n") then messageBody = "\n" .. messageBody end
+	local text
 	if target == "shared" or target == "clients" then
 		local senderName = sender == Entity(0) and "SERVER" or tostring(sender)
-		self:AppendText(Format("--[[%-13s: %s : %s]] %s", replName, senderName, message, messageBody))
+		text = Format("--[[%-13s: %s : %s]] %s", replName, senderName, message, messageBody)
 	else
-		self:AppendText(Format("--[[%-13s: %s]] %s", replName, message, messageBody))
+		text = Format("--[[%-13s: %s]] %s", replName, message, messageBody)
+	end
+
+	-- The run result of a command typed into this panel is its answer; script
+	-- output (print/Msg) and results relayed from editor runs are plain output.
+	if isRunResult and transferId == self.lastTransfer then
+		self:AppendAnswer(text)
+	else
+		self:AppendText(text)
 	end
 end
 
-function PANEL:AppendText(text)
+-- isReplAnswer marks `text` as the result of a submitted REPL command so the
+-- frontend closes that input's collapsible fold. Leave it nil/false for all other
+-- console output (print/Msg capture, editor-run output, diagnostics).
+function PANEL:AppendText(text, isReplAnswer)
+	self.HasOutput = true
 	if not self.Ready then
 		self.TextBuffer = self.TextBuffer or {}
-		table.insert(self.TextBuffer, text)
+		table.insert(self.TextBuffer, {text = text, isReplAnswer = isReplAnswer})
 		return
 	end
 
-	self:RunJS("replinterface.AddText(\"%s\")", text:JavascriptSafe())
+	self:RunJS("replinterface.AddText(\"%s\", %s)", text:JavascriptSafe(), isReplAnswer and "true" or "false")
+end
+
+-- Emit `text` as the current command's answer (closing its REPL fold) if one is
+-- still pending, otherwise as plain output. Guarantees exactly one answer per
+-- submitted command even when several results (or none) come back.
+function PANEL:AppendAnswer(text)
+	local isReplAnswer = self.AnswerPending or false
+	self.AnswerPending = false
+	self:AppendText(text, isReplAnswer)
 end
 
 function PANEL:SetupHTML()
 	self.HTMLPanel:OpenURL(self.URL)
+	self.HTMLPanel:RunJavascript(Noir.JSRuntime)
 	self:AddJSCallback("OnReady")
 	self.HTMLPanel:AddFunction("console", "log", function(...)
 		Noir.Debug("console.log", ...)
@@ -299,13 +433,21 @@ function PANEL:SetupHTML()
 		Noir.Debug("OpenURL", url)
 		if self.OnOpenURL then
 			self:OnOpenURL(url)
-		else
+		elseif not (Noir.Editor and Noir.Editor.OpenFileURL(url)) then
 			gui.OpenURL(url)
 		end
 	end)
 
+	self.HTMLPanel:AddFunction("noirjs", "OnResult", function(identifier, kind, text) self:JS_OnJSResult(identifier, kind, text) end)
 	self:AddJSCallback("OnCode")
 	self:AddJSCallback("OnAction")
+	self:AddJSCallback("OnFileExistsRequest")
+end
+
+-- Monaco asks whether a file reference points at a real file; answer async so it
+-- can decide whether to make the reference clickable.
+function PANEL:JS_OnFileExistsRequest(path, requestId)
+	self:RunJS("replinterface.ProvideFileExists(%d, %s)", requestId, Noir.Utils.FileReadable("GAME", path) and "true" or "false")
 end
 
 function PANEL:UpdateCOH()

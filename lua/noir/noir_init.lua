@@ -128,9 +128,15 @@ function Noir.Load()
 	print("|                                     |")
 	print("+----------Loading complete-----------+")
 	Noir.Msg("Loaded!\n")
-	-- Register editor settings now that the dashboard module is loaded (editor loads first)
+	-- Register native dashboard tabs in a deterministic order before any
+	-- autorun script runs, so user-registered tabs always appear after ours.
+	if CLIENT and Noir.FileSearch and Noir.FileSearch.UI then Noir.FileSearch.UI.RegisterDashboard() end
 	if CLIENT and Noir.Editor then Noir.Editor.RegisterDashboard() end
-	-- Trigger autorun scripts after Noir is fully loaded
+	if CLIENT and Noir.Format then Noir.Format.RegisterDashboard() end
+	if CLIENT and Noir.Autorun then Noir.Autorun.RegisterDashboard() end
+	-- First-run greeting; also creates the default config so it only shows once
+	if CLIENT and Noir.Editor then Noir.Editor.Storage.FirstRunCheck() end
+	-- Trigger autorun scripts after Noir is fully loaded and all native tabs are registered
 	if CLIENT and Noir.Autorun then Noir.Autorun.Initialize() end
 end
 

@@ -57,6 +57,47 @@ function Utils.FixFilePath(filePath, fileName)
 	return filePath, fileName
 end
 
+-- Percent-decode a URL component (turns %2F -> /, + -> space).
+function Utils.URLDecode(str)
+	str = str:gsub("+", " ")
+	str = str:gsub("%%(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end)
+	return str
+end
+
+-- Parse a URL of the form scheme://action?key=value&key=value into
+-- { scheme = "gmod-file", action = "open", query = { path = ..., start = ... } }.
+-- Query values are percent-decoded. Returns nil if there is no scheme.
+function Utils.ParseURL(url)
+	local scheme, rest = url:match("^([%w%-%+%.]+)://(.*)$")
+	if not scheme then return nil end
+	local action, queryStr = rest:match("^([^%?]*)%??(.*)$")
+	local query = {}
+	for pair in queryStr:gmatch("[^&]+") do
+		local key, value = pair:match("^([^=]*)=?(.*)$")
+		if key ~= "" then query[Utils.URLDecode(key)] = Utils.URLDecode(value) end
+	end
+	return {scheme = scheme, action = action, query = query}
+end
+
+-- Whether a file exists, resolving the path exactly like OpenFile does
+-- (FixFilePath remaps a leading lua/ -> LUA, data/ -> DATA).
+function Utils.FileExists(filePath, fileName)
+	local path, name = Utils.FixFilePath(filePath, fileName)
+	return file.Exists(name, path)
+end
+
+-- Whether a file can actually be opened & read. file.Exists returns true for
+-- AddCSLuaFile'd paths that exist in the manifest but can't be read on the
+-- client, so we probe with a real file.Open (cheap; no data is read). Used for
+-- the JS link-existence requests so links only appear for files we can open.
+function Utils.FileReadable(filePath, fileName)
+	local path, name = Utils.FixFilePath(filePath, fileName)
+	local f = file.Open(name, "rb", path)
+	if not f then return false end
+	f:Close()
+	return true
+end
+
 function Utils.ParseLuaError(message, identifier)
 	if not isstring(message) then return Noir.Format.FormatShort(message), 0 end
 	local line, msg = string.match(message, string.PatternSafe(identifier) .. ":(%d*):(.+)")

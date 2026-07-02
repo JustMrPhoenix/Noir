@@ -42,6 +42,9 @@ function Editor.Console.CreateTab(consoleName, isMain)
 		replPanel:SetVisible(false)
 		replPanel:SetCursor("sizenwse")
 		session.ReplPanel = replPanel
+		replPanel.IsMainConsole = isMain or false
+		replPanel.Session = session
+		Editor.Console.ApplySessionLanguage(replPanel, session)
 		replPanel.OnMousePressed = function(_, ...)
 			if Editor.Frame.Maximized then return end
 			Editor.Frame:OnMousePressed(...)
@@ -57,6 +60,30 @@ function Editor.Console.CreateTab(consoleName, isMain)
 
 	if isMain then Editor.Console.Main = session end
 	return session
+end
+
+-- Restore a console's persisted (non-Lua) language onto its REPL panel. Deferred
+-- until the panel's HTML is ready, since replinterface.SetLanguage is a JS call.
+-- Sets replPanel.Language up front so the JS run path is active before the frontend
+-- language is applied.
+function Editor.Console.ApplySessionLanguage(replPanel, session)
+	local langId = session.language
+	if not langId or langId == "glua" then return end
+	replPanel.Language = langId
+	local function apply()
+		replPanel:RunJS("replinterface.SetLanguage(%q)", langId)
+		replPanel:RunJS("replinterface.ResetAutocompletion()")
+	end
+
+	if replPanel.Ready then
+		apply()
+	else
+		local prevOnReady = replPanel.OnReady
+		replPanel.OnReady = function(pnl)
+			if prevOnReady then prevOnReady(pnl) end
+			apply()
+		end
+	end
 end
 
 -- Show the main console tab (create if needed)

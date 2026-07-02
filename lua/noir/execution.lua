@@ -1,4 +1,47 @@
-﻿function Noir.RunCode(code, identifier, environment)
+﻿Noir.JSRuntime = [[window.__noir = window.__noir || {};
+window.__noir.fmt = function(a){ try { return (a !== null && typeof a === "object") ? JSON.stringify(a) : String(a); } catch(e){ return String(a); } };
+window.__noir.eval = function(id, code, captureLog){
+	var orig;
+	if (captureLog) {
+		orig = { log: console.log, warn: console.warn, debug: console.debug, error: console.error };
+		var send = function(kind){ return function(){ noirjs.OnResult(id, kind, Array.prototype.map.call(arguments, window.__noir.fmt).join(" ")); }; };
+		console.log = send("log"); console.warn = send("warn"); console.debug = send("debug"); console.error = send("error");
+	}
+	try {
+		noirjs.OnResult(id, "return", window.__noir.fmt((0, eval)(code)));
+	} catch(err) {
+		noirjs.OnResult(id, "ERROR", (err && err.stack) ? String(err.stack) : String(err));
+	} finally {
+		if (orig) { console.log = orig.log; console.warn = orig.warn; console.debug = orig.debug; console.error = orig.error; }
+	}
+};
+window.__noir.run = function(code){
+	var ours = { log: console.log, warn: console.warn, debug: console.debug, error: console.error };
+	var orig = window.__noirOrigConsole || ours;
+	try {
+		console.log = orig.log; console.warn = orig.warn; console.debug = orig.debug; console.error = orig.error;
+		(0, eval)(code);
+	} catch(err) {
+		orig.error((err && err.stack) ? String(err.stack) : String(err));
+	} finally {
+		console.log = ours.log; console.warn = ours.warn; console.debug = ours.debug; console.error = ours.error;
+	}
+};]]
+
+-- Emit a call to the REPL eval harness. RunJavascript this directly (not via PANEL:RunJS)
+-- since user JS routinely contains % -- the code is passed as a Format argument, not part
+-- of the template, so its % survive.
+function Noir.BuildJSEval(identifier, code, captureLog)
+	return Format([[window.__noir.eval("%s", "%s", %s);]],
+		identifier:JavascriptSafe(), code:JavascriptSafe(), captureLog and "true" or "false")
+end
+
+-- Emit a call to the editor-run harness.
+function Noir.BuildJSEditorRun(code)
+	return Format([[window.__noir.run("%s");]], code:JavascriptSafe())
+end
+
+function Noir.RunCode(code, identifier, environment)
 	identifier = identifier or "Noir.RunCode"
 	local compileResults = CompileString(code, identifier, false)
 	if not isfunction(compileResults) then
@@ -28,6 +71,10 @@ function Noir.SendCode(code, identifier, target, transferId)
 		identifier = identifier,
 		vars = Noir.Environment.MakeVars()
 	}
+
+	if CLIENT and Noir.Dashboard then
+		data.sortMode = Noir.Dashboard.Get("Output", "tableSort")
+	end
 
 	-- Parse output format flags
 	local lowerCode = string.lower(code)

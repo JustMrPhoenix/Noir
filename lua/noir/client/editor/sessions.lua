@@ -112,7 +112,25 @@ function Editor.Session.Close(sessionName, nextActive, noSave)
 		Editor.Tab.SetActive(Editor.Sessions[#Editor.Sessions < idx and #Editor.Sessions or idx].name)
 	end
 
-	if not session or session.sessionType ~= "console" then Editor.MonacoPanel:CloseSession(sessionName) end
+	if not session or session.sessionType ~= "console" then
+		-- When the newly active tab is a console, SetActive left Monaco pointing at
+		-- the session we're closing. Hand the frontend another editor session to
+		-- switch to (it fabricates an "Unnamed" document otherwise) and flag the
+		-- resulting OnSessionSet so it doesn't steal the active tab from the console.
+		local switchTo
+		if Editor.ActiveSession and Editor.ActiveSession.sessionType == "console" then
+			for _, v in ipairs(Editor.Sessions) do
+				if v.sessionType ~= "console" then
+					switchTo = v.name
+					break
+				end
+			end
+
+			Editor.Tab.SuppressActivate = switchTo
+		end
+
+		Editor.MonacoPanel:CloseSession(sessionName, switchTo)
+	end
 	if noSave then return end
 	Editor.Storage.QueueSave()
 end
@@ -217,6 +235,38 @@ function Editor.OpenFile(path, fileName)
 	return Editor.Session.Create(name, code or "", {path, fileName}, {
 		language = lang
 	})
+end
+
+-- Handle a gmod-file:// URL (e.g. from an OpenURL callback) by opening the
+-- referenced file in the editor and jumping to the requested line. The path is
+-- a game-root-relative path (leading lua/ or data/ is remapped to the right
+-- search path by OpenFile -> FixFilePath). Returns true if the URL was ours.
+--
+-- Format: gmod-file://open?path=lua%2Farcana%2Fbloom.lua&start=88&end=111
+function Editor.OpenFileURL(url)
+	local parsed = Noir.Utils.ParseURL(url)
+	if not parsed or parsed.scheme ~= "gmod-file" then return false end
+	local path = parsed.query.path
+	if not path or path == "" then
+		Derma_Message("Malformed file link (missing path):\n" .. url, "Cant open file", "Ok"):SetSkin("Noir")
+		return true
+	end
+
+	if not Noir.Utils.FileExists("GAME", path) then
+		Derma_Message("File does not exist:\n" .. path, "Cant open file", "Ok"):SetSkin("Noir")
+		return true
+	end
+
+	Editor.Show()
+	-- Existence is confirmed above, so OpenFile either opens the file or re-activates
+	-- an already-open tab (it returns nil in that case, so don't guard on its result).
+	Editor.OpenFile("GAME", path)
+	-- OpenFile creates or re-activates the tab synchronously; RunJS is FIFO, so the
+	-- goto is queued after the session swap and lands on the right model. The
+	-- frontend only supports jumping to a single line, so we use the range start.
+	local startLine = tonumber(parsed.query.start)
+	if startLine then Editor.MonacoPanel:GotoLine(startLine) end
+	return true
 end
 
 function Editor.Session.SaveAs(sessionName, callback)
