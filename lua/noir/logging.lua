@@ -14,7 +14,14 @@ end
 
 function Noir.ErrorT(...)
 	Noir.Msg(Color(200, 0, 0), "[ERROR] ", whiteColor, ...)
-	error(...)
+	-- error() takes (message, level) — concat the varargs into one message so a
+	-- second argument doesn't get treated as the level.
+	local parts = {}
+	for i = 1, select("#", ...) do
+		parts[i] = tostring(select(i, ...))
+	end
+
+	error(table.concat(parts), 2)
 end
 
 function Noir.print(...)

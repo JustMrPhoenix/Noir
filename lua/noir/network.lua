@@ -22,14 +22,41 @@ end
 
 -- Access gate for incoming code transfers. The NoirSendCode hook gets the first
 -- say (receiving the sender and the run target): if any listener returns a
--- non-nil value we honor it, otherwise we fall back to the superadmin check.
+-- non-nil value we honor it, otherwise script replies (a run's output going back
+-- to its runner) are validated against the original transfer and everything else
+-- falls back to the superadmin check.
 -- Only consulted on the server (the authority for CL -> SV and CL -> SH/CLS
 -- runs) — clients trust transfers relayed by the server, and local "self" runs
 -- never reach the network so they skip this entirely.
-function Network.CheckAccess(sender, target)
+function Network.CheckAccess(sender, target, data)
 	local allowed = hook.Run("NoirSendCode", sender, target)
 	if allowed ~= nil then return allowed == true end
+	if data and data.type == "scriptMessage" then
+		return Network.IsReplyAllowed(sender, target, data.origTransferId)
+	end
+
 	return sender:IsSuperAdmin()
+end
+
+-- A scriptMessage is a reply: output flowing back to whoever initiated a run.
+-- The replying player doesn't need superadmin — they were targeted, not acting —
+-- but the reply must reference a transfer we actually relayed: it has to exist,
+-- belong to the runner it's addressed to, and have included the replier in its
+-- targets.
+function Network.IsReplyAllowed(sender, target, origTransferId)
+	if not origTransferId then return false end
+	if target == "server" then
+		-- Reply to a server-initiated run: the server reserved the ID locally
+		-- in GenerateTransferId.
+		return Network.Transfers[origTransferId] ~= nil
+	end
+
+	if not (isentity(target) and IsValid(target) and target:IsPlayer()) then return false end
+	local transfers = Network.Transfers[target:SteamID()]
+	local orig = transfers and transfers[origTransferId]
+	if not istable(orig) then return false end
+	if orig.target == "clients" or orig.target == "shared" then return true end
+	return orig.target == sender
 end
 
 Network.Receivers = {
@@ -38,16 +65,29 @@ Network.Receivers = {
 		local transferId = net.ReadString()
 		local data = net.ReadTable()
 		local target = data.target
-		if SERVER and not Network.CheckAccess(sender, target) then return end
 		local senderID = sender ~= Entity(0) and sender:SteamID() or "SERVER"
 		local tbl = Network.Transfers[senderID] or {}
 		Network.Transfers[senderID] = tbl
+		if SERVER and not Network.CheckAccess(sender, target, data) then
+			-- The string parts are already on the wire (staggered timers sender-side);
+			-- mark the transfer so they get dropped silently instead of erroring as
+			-- "non existing transfer".
+			tbl[transferId] = "DENIED"
+			return
+		end
+
 		tbl[transferId] = data
 		Noir.Debug("TransferStart", transferId, data)
 		callHandler(data.type, "start", sender, transferId, data)
 		if SERVER and target ~= "server" then
 			local sendTo = target
 			if target == "shared" or target == "clients" then sendTo = player.GetHumans() end
+			if not sendTo or (isentity(sendTo) and not (IsValid(sendTo) and sendTo:IsPlayer())) then
+				tbl[transferId] = "DENIED"
+				Noir.Error("Dropping transfer to invalid target! ID: ", transferId, "\n")
+				return
+			end
+
 			net.Start(tag)
 			net.WriteEntity(sender)
 			net.WriteUInt(0, UIntSize)
@@ -67,22 +107,25 @@ Network.Receivers = {
 		-- truncates at the first null byte).
 		local part = net.ReadData(net.ReadUInt(17))
 		local transfers = Network.Transfers[sender ~= Entity(0) and sender:SteamID() or "SERVER"]
-		if not transfers then
-			Noir.ErrorT("Received string part for non existing transfer! ID:", transferId)
-			return
-		end
-
-		local info = Network.Transfers[sender ~= Entity(0) and sender:SteamID() or "SERVER"][transferId]
-		if not info then
-			Noir.ErrorT("Received string part for non existing transfer! ID:", transferId)
+		local info = transfers and transfers[transferId]
+		-- Parts of a denied/dropped transfer keep arriving on their own timers
+		if info == "DENIED" then return end
+		if not istable(info) then
+			Noir.ErrorT("Received string part for non existing transfer! ID: ", transferId)
 			return
 		end
 
 		local target = info.target
-		if SERVER and not Network.CheckAccess(sender, target) then return end
+		if SERVER and not Network.CheckAccess(sender, target, info) then return end
 		if SERVER and target ~= "server" then
 			local sendTo = target
 			if target == "shared" or target == "clients" then sendTo = player.GetHumans() end
+			if not sendTo or (isentity(sendTo) and not (IsValid(sendTo) and sendTo:IsPlayer())) then
+				transfers[transferId] = "DENIED"
+				Noir.Error("Dropping transfer to invalid target! ID: ", transferId, "\n")
+				return
+			end
+
 			net.Start(tag)
 			net.WriteEntity(sender)
 			net.WriteUInt(1, UIntSize)

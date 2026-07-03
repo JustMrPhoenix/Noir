@@ -42,9 +42,13 @@ function Environment.SendMessage(target, transferId, message, messageData)
 		return
 	end
 
+	-- Client -> server transfers route by data.target (the target argument only
+	-- steers server-side net.Send), so the reply's destination has to travel in
+	-- the data. The runner shows up as Entity(0)/worldspawn when it's the server.
 	Noir.Network.SendTransfer(nil, {
 		message = message,
-		origTransferId = transferId
+		origTransferId = transferId,
+		target = (isentity(target) and target:EntIndex() == 0) and "server" or target
 	}, "scriptMessage", messageBody, target)
 end
 
