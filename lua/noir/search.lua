@@ -209,17 +209,19 @@ function Search.CopyToClipboard(value, runner)
 	if CLIENT and runner == LocalPlayer() then
 		SetClipboardText(text)
 	elseif IsValid(runner) and runner:IsPlayer() then
-		Noir.Network.SendTransfer(nil, {}, "setClipboard", text, runner)
+		Noir.Network.Fire("setClipboard", text, runner)
 	end
 
 	return value
 end
 
-Noir.Network.StringHandlers["setClipboard"] = {
-	received = function(sender, transferId, data)
+-- A fire-and-forget one-shot channel: no reply, torn down right after the open.
+Noir.Network.ChannelHandlers["setClipboard"] = {
+	oneshot = true,
+	open = function(sender, channelId, data)
 		if not CLIENT then return end
-		-- Same trust check as running Lua (network.lua:31-32): only the server
-		-- (Entity(0)) or a superadmin is allowed to drive our clipboard.
+		-- Same trust check as running Lua: only the server (Entity(0)) or a superadmin
+		-- is allowed to drive our clipboard.
 		local trusted = sender == Entity(0) or (IsValid(sender) and sender:IsPlayer() and sender:IsSuperAdmin())
 		if not trusted then return end
 		SetClipboardText(data.string)

@@ -33,59 +33,74 @@ function Environment.MakeVars()
 	return vars
 end
 
+-- Send a run message (output / result) back to the runner on the run's channel.
+-- `target` is the runner (the channel's opener); a self run delivers locally. Thin
+-- wrapper over the channel API so existing callers stay unchanged. Routing and the
+-- local-delivery shortcut are handled inside Network.SendOnChannel.
 function Environment.SendMessage(target, transferId, message, messageData)
 	Noir.Debug("Env.SendMessage", target, transferId, message, messageData)
 	local messageBody = Noir.Format.FormatMessage(message, messageData, messageData.opts)
 	Noir.Debug("Env.SendMessageBODY", messageBody)
-	if target == (SERVER and Entity(0) or LocalPlayer()) then
-		Environment.OnMessage(target, transferId, message, messageBody)
-		return
-	end
-
-	-- Client -> server transfers route by data.target (the target argument only
-	-- steers server-side net.Send), so the reply's destination has to travel in
-	-- the data. The runner shows up as Entity(0)/worldspawn when it's the server.
-	Noir.Network.SendTransfer(nil, {
-		message = message,
-		origTransferId = transferId,
-		target = (isentity(target) and target:EntIndex() == 0) and "server" or target
-	}, "scriptMessage", messageBody, target)
+	local dst = (isentity(target) and target:EntIndex() == 0) and "server" or target
+	Noir.Network.SendOnChannel(transferId, message, messageBody, dst)
 end
 
-Noir.Network.StringHandlers["scriptMessage"] = {
-	received = function(sender, transferId, data)
-		Noir.Environment.OnMessage(sender, data.origTransferId, data.message, data.string)
-	end
-}
-
-Environment.MessageHandlers = {}
-function Environment.OnMessage(sender, transferId, message, data)
-	Noir.Debug("OnMessage", sender, transferId, message, data)
-	if not Environment.MessageHandlers[transferId] then return end
-	local handlers = Environment.MessageHandlers[transferId]
-	-- This will iterate through numeric keys
-	Noir.Debug("OnMessageI", handlers)
-	for _, callback in ipairs(handlers) do
-		callback(sender, transferId, message, data)
-	end
-
-	local messageHandlers = Environment.MessageHandlers[transferId][message]
-	Noir.Debug("OnMessageM", messageHandlers)
-	if not messageHandlers then return end
-	for _, callback in pairs(messageHandlers) do
-		callback(sender, transferId, message, data)
-	end
-end
-
+-- Register a handler for messages on a run channel. Wrapper over Network.OnChannel;
+-- preserves the (sender, id, message, body) callback shape (body = the message
+-- string) that run.lua / repl.lua expect.
 function Environment.RegisterHandler(callback, transferId, message)
-	local handlersTbl = Environment.MessageHandlers[transferId] or {}
-	Environment.MessageHandlers[transferId] = handlersTbl
-	if message then
-		handlersTbl[message] = handlersTbl[message] or {}
-		table.insert(handlersTbl[message], callback)
-	else
-		table.insert(handlersTbl, callback)
+	Noir.Network.OnChannel(transferId, message, function(sender, channelId, msg, data)
+		callback(sender, channelId, msg, data.string)
+	end)
+end
+
+-- Tear down a run channel. Call from session / panel teardown -- NEVER on a run's
+-- `done`, since hooks/timers set up by the run may still be replying.
+function Environment.CloseRun(transferId, target)
+	if not transferId then return end
+	Noir.Network.CloseChannel(transferId, target)
+end
+
+-- Format a run channel's target for display (a player nick, or the group name).
+local function runTargetName(target)
+	if isentity(target) and IsValid(target) and target:IsPlayer() then return target:Nick() end
+	return tostring(target)
+end
+
+-- Run channels this node opened -- the script-output streams we're subscribed to.
+-- Each entry: {id, label, target}. Excludes non-run channels (e.g. fileSearch).
+function Environment.GetRunChannels()
+	local me = SERVER and Entity(0) or LocalPlayer()
+	local out = {}
+	for id, ch in pairs(Noir.Network.Channels) do
+		if ch.type == "runCode" and ch.opener == me then
+			out[#out + 1] = {id = id, label = ch.label, target = ch.target}
+		end
 	end
+
+	return out
+end
+
+-- Unsubscribe from (close) one run channel we opened: stop receiving its output and
+-- tell the server to stop relaying it. Scoped to this channelId, so other runs still
+-- streaming to the console are untouched. Returns true if a run channel was closed.
+function Environment.UnsubscribeRun(channelId)
+	local ch = Noir.Network.Channels[channelId]
+	if not ch or ch.type ~= "runCode" then return false end
+	if ch.opener ~= (SERVER and Entity(0) or LocalPlayer()) then return false end
+	Environment.CloseRun(channelId, ch.target)
+	return true
+end
+
+-- Unsubscribe from every run channel we opened (script output only). Returns count.
+function Environment.UnsubscribeAllRuns()
+	local n = 0
+	for _, run in ipairs(Environment.GetRunChannels()) do
+		Environment.CloseRun(run.id, run.target)
+		n = n + 1
+	end
+
+	return n
 end
 
 Environment.MessageFuncs = {"print", "Msg", "MsgC", "MsgN", "MsgAll", "ErrorNoHalt"}
@@ -228,3 +243,49 @@ concommand.Add("noir_clearenvs_all", function(ply)
 
 	Noir.Msg("Cleared ", Color(0, 150, 0), tostring(cleared), Color(255, 255, 255), " envs.")
 end, nil, "Clears all Noir environments")
+
+-- Unsubscribe from a run's script-output channel so it stops spamming the console.
+-- `all` closes every run channel we opened. Each close is scoped to its own
+-- channelId, so other runs still streaming to the console are unaffected.
+concommand.Add("noir_unsubscribe", function(ply, cmd, args)
+	if SERVER and IsValid(ply) and not ply:IsSuperAdmin() then return end
+	local id = args[1]
+	if not id or id == "" then
+		local runs = Environment.GetRunChannels()
+		Noir.Msg("Usage: noir_unsubscribe <channelId|all>\n")
+		if #runs == 0 then
+			Noir.Msg("No active run channels.\n")
+			return
+		end
+
+		Noir.Msg("Active run channels:\n")
+		for _, run in ipairs(runs) do
+			Noir.Msg("  ", Color(0, 120, 205), run.id, Color(255, 255, 255),
+				Format("  %s -> %s\n", run.label or "?", runTargetName(run.target)))
+		end
+
+		return
+	end
+
+	if string.lower(id) == "all" then
+		local n = Environment.UnsubscribeAllRuns()
+		Noir.Msg("Unsubscribed from ", Color(0, 150, 0), tostring(n), Color(255, 255, 255), " run channel(s).\n")
+	elseif Environment.UnsubscribeRun(id) then
+		Noir.Msg("Unsubscribed from run channel ", Color(0, 120, 205), id, Color(255, 255, 255), ".\n")
+	else
+		Noir.Msg("No such run channel: ", Color(150, 0, 0), tostring(id), Color(255, 255, 255), "\n")
+	end
+end, function(cmd, argStr)
+	-- Auto-suggest active run channel ids (+ "all"). The label/target after the id are
+	-- display only -- the handler reads args[1] and ignores the rest.
+	local partial = string.Trim(argStr or ""):lower()
+	local out = {}
+	if partial == "" or string.find("all", partial, 1, true) then out[#out + 1] = cmd .. " all" end
+	for _, run in ipairs(Environment.GetRunChannels()) do
+		if partial == "" or string.find(run.id:lower(), partial, 1, true) then
+			out[#out + 1] = Format("%s %s  (%s -> %s)", cmd, run.id, run.label or "?", runTargetName(run.target))
+		end
+	end
+
+	return out
+end, "Unsubscribe from a run's script-output channel (channelId or 'all')")

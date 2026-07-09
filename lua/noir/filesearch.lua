@@ -269,15 +269,17 @@ function FileSearch.CancelAll()
 end
 
 ----------------------------------------------------------------------
--- Networking. Reuses Noir.Network (no new net string). The request runs the
--- worker on the server with the CLIENT's performance settings; the response
--- ships results back as JSON to the runner. Access is enforced by
--- Network.CheckAccess in network.lua's Receivers; the server re-checks below.
+-- Networking. A remote search is a Noir channel (no new net string). The client
+-- opens a "fileSearch" channel to the server; the server runs the worker with the
+-- CLIENT's performance settings and ships results back as JSON on the same channel.
+-- Opening the channel is superadmin-gated by Network.CheckAccess.
 ----------------------------------------------------------------------
-Noir.Network.StringHandlers["fileSearchRequest"] = {
-	received = function(sender, transferId, data)
+Noir.Network.ChannelHandlers["fileSearch"] = {
+	-- Server endpoint: run the worker with the requesting client's performance
+	-- settings and reply on the same channel. Streaming is possible -- SendOnChannel
+	-- can be called repeatedly (e.g. progress + final result).
+	open = function(sender, channelId, data)
 		if not SERVER then return end
-		if not Noir.Network.CheckAccess(sender, "server") then return end
 		local req = util.JSONToTable(data.string) or {}
 		local job = FileSearch.Start({
 			query = req.query,
@@ -292,8 +294,7 @@ Noir.Network.StringHandlers["fileSearchRequest"] = {
 			maxPreviewLen = req.maxPreviewLen,
 			realm = "server",
 			onDone = function(doneJob, completed)
-				FileSearch.ServerJobs[transferId] = nil
-				if not IsValid(sender) then return end
+				FileSearch.ServerJobs[channelId] = nil
 				local payload = util.TableToJSON({
 					results = doneJob.results,
 					completed = completed,
@@ -301,46 +302,40 @@ Noir.Network.StringHandlers["fileSearchRequest"] = {
 					matched = doneJob.matched
 				})
 
-				Noir.Network.SendTransfer(nil, {
-					target = sender,
-					origTransferId = transferId
-				}, "fileSearchResult", payload, sender)
+				-- Defaults to addressing the opener (the requesting client).
+				Noir.Network.SendOnChannel(channelId, "result", payload)
 			end
 		})
 
-		if job then FileSearch.ServerJobs[transferId] = job end
-	end
-}
-
-Noir.Network.StringHandlers["fileSearchResult"] = {
-	received = function(sender, transferId, data)
-		if not CLIENT then return end
-		local ctx = FileSearch.PendingRemote[data.origTransferId]
-		if not ctx then return end
-		FileSearch.PendingRemote[data.origTransferId] = nil
-		local decoded = util.JSONToTable(data.string) or {}
-		if ctx.OnRemoteResults then ctx.OnRemoteResults(decoded) end
-	end
-}
-
-Noir.Network.StringHandlers["fileSearchCancel"] = {
-	received = function(sender, transferId, data)
+		if job then FileSearch.ServerJobs[channelId] = job end
+	end,
+	-- Client closed the channel (results delivered) or disconnected: abort any job.
+	close = function(channelId)
 		if not SERVER then return end
-		if not Noir.Network.CheckAccess(sender, "server") then return end
-		local job = FileSearch.ServerJobs[data.cancelId]
+		local job = FileSearch.ServerJobs[channelId]
 		if job then
 			FileSearch.CancelJob(job)
-			FileSearch.ServerJobs[data.cancelId] = nil
+			FileSearch.ServerJobs[channelId] = nil
 		end
 	end
 }
 
 -- Send a search request to the server. `ctx.OnRemoteResults(decoded)` is called
 -- with {results, completed, scanned, matched} when the server replies. Returns
--- the request id (pass it to FileSearch.SendCancel to abort).
+-- the request (channel) id (pass it to FileSearch.SendCancel to abort).
 function FileSearch.SendRemote(opts, ctx)
-	local requestId = Noir.Network.GenerateTransferId()
+	local requestId = Noir.Network.OpenChannel("fileSearch", "server")
 	FileSearch.PendingRemote[requestId] = ctx
+	Noir.Network.OnChannel(requestId, "result", function(sender, channelId, message, data)
+		if not FileSearch.PendingRemote[channelId] then return end
+		FileSearch.PendingRemote[channelId] = nil
+		local decoded = util.JSONToTable(data.string) or {}
+		if ctx.OnRemoteResults then ctx.OnRemoteResults(decoded) end
+		-- Bounded op done: close the channel (drops both records; the job already
+		-- finished so nothing is aborted).
+		Noir.Network.CloseChannel(channelId)
+	end)
+
 	local payload = util.TableToJSON({
 		query = opts.query,
 		caseInsensitive = opts.caseInsensitive,
@@ -354,12 +349,14 @@ function FileSearch.SendRemote(opts, ctx)
 		maxPreviewLen = opts.maxPreviewLen
 	})
 
-	Noir.Network.SendTransfer(requestId, {target = "server"}, "fileSearchRequest", payload, "server")
+	Noir.Network.OpenSend(requestId, payload)
 	return requestId
 end
 
--- Stop waiting on a server search and tell the server to abort it.
+-- Stop waiting on a server search and tell the server to abort it. Closing the
+-- channel relays to the server, whose close handler cancels the running job.
 function FileSearch.SendCancel(requestId)
-	if requestId then FileSearch.PendingRemote[requestId] = nil end
-	Noir.Network.SendTransfer(nil, {target = "server", cancelId = requestId}, "fileSearchCancel", "cancel", "server")
+	if not requestId then return end
+	FileSearch.PendingRemote[requestId] = nil
+	Noir.Network.CloseChannel(requestId)
 end

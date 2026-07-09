@@ -25,11 +25,17 @@ function Editor.Run.Code(target)
 		targets = 1
 	end
 
-	local id = Noir.Network.GenerateTransferId()
+	local id = Noir.Network.OpenChannel("runCode", target)
 	if not id then
 		Editor.MonacoPanel:SetStatus("Could not send code! See console for details", Color(150, 0, 0))
 		return
 	end
+
+	-- Track every run this session starts (id -> target). Each run channel may keep
+	-- replying, so we hold them until the session is closed (Editor.Session.Close)
+	-- and tear them down together.
+	Editor.ActiveSession.runTransfers = Editor.ActiveSession.runTransfers or {}
+	Editor.ActiveSession.runTransfers[id] = target
 
 	local totalRan = 0
 	local hasError = false

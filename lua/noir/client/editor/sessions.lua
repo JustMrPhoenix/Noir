@@ -96,6 +96,16 @@ end
 
 function Editor.Session.Close(sessionName, nextActive, noSave)
 	local session = Editor.SessionsByName[sessionName]
+	-- Tear down any run channels this session opened: closing the tab is the manual
+	-- teardown point (a run's replies live on until then or until disconnect).
+	if session and session.runTransfers then
+		for id, target in pairs(session.runTransfers) do
+			Noir.Environment.CloseRun(id, target)
+		end
+
+		session.runTransfers = nil
+	end
+
 	-- Closing a file is an interaction too: bump it to the front of recents so
 	-- "Reopen Closed Tab" / "Open Recent" reflect close order.
 	if session and session.file then Editor.Session.AddRecent(unpack(session.file)) end

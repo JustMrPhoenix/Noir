@@ -66,6 +66,18 @@ function Noir.SendCode(code, identifier, target, transferId)
 		return
 	end
 
+	-- Ensure a run channel exists for this id (callers normally OpenChannel first to
+	-- register handlers; this covers direct/self callers). Output flows back on it.
+	transferId = transferId or Noir.Network.OpenChannel("runCode", target)
+	local ch = Noir.Network.ensureRecord(transferId, {
+		type = "runCode",
+		target = target,
+		opener = SERVER and Entity(0) or LocalPlayer(),
+	})
+
+	-- Friendly label for `noir_unsubscribe` listing/auto-suggestion.
+	ch.label = identifier
+
 	local data = {
 		target = target,
 		identifier = identifier,
@@ -180,26 +192,32 @@ function Noir.SendCode(code, identifier, target, transferId)
 		return transferId
 	end
 
-	Noir.Debug("SendCode", data, code, data.parts)
-	Noir.Network.SendTransfer(transferId, data, "runCode", code, target)
+	-- Send the code as the opening message of the run channel. The channel then
+	-- carries the run's output back on the same id, for as long as the run keeps
+	-- replying (hooks/timers), until teardown or disconnect.
+	Noir.Debug("SendCode", data, code)
+	Noir.Network.OpenSend(transferId, code, data)
 	return transferId
 end
 
-Noir.Network.StringHandlers["runCode"] = {
-	start = function(sender, transferId, data)
-		if SERVER then
-			Noir.Environment.UpdateVarsSV(data)
-			if data.target == "server" then return end
-			Noir.Msg("Sending code(", Color(0, 120, 205), transferId, Color(255, 255, 255), "): ", -- ):
-				Color(230, 220, 115), data.identifier,
-				Color(255, 255, 255), " [",
-				Color(0, 150, 0), sender == Entity(0) and "(SERVER)" or sender:Nick() .. "(" .. sender:SteamID() .. ")",
-				Color(255, 255, 255), " => ",
-				Color(0, 150, 0), isentity(data.target) and data.target:Nick() .. "(" .. data.target:SteamID() .. ")" or data.target:upper(),
-				Color(255, 255, 255), "]\n")
-		end
+Noir.Network.ChannelHandlers["runCode"] = {
+	-- Server-side hook when a runCode open is received/relayed: inject server-only
+	-- vars into the (about-to-be-forwarded) data and log the relay.
+	serverOpen = function(sender, transferId, data)
+		Noir.Environment.UpdateVarsSV(data)
+		if data.target == "server" then return end
+		Noir.Msg("Sending code(", Color(0, 120, 205), transferId, Color(255, 255, 255), "): ", -- ):
+			Color(230, 220, 115), data.identifier,
+			Color(255, 255, 255), " [",
+			Color(0, 150, 0), sender == Entity(0) and "(SERVER)" or sender:Nick() .. "(" .. sender:SteamID() .. ")",
+			Color(255, 255, 255), " => ",
+			Color(0, 150, 0), isentity(data.target) and data.target:Nick() .. "(" .. data.target:SteamID() .. ")" or data.target:upper(),
+			Color(255, 255, 255), "]\n")
 	end,
-	received = function(sender, transferId, data)
+	-- Any endpoint (target client, or the server for shared/server runs) runs the
+	-- code and replies on the SAME channel. `sender` is the run's initiator (opener),
+	-- so output flows back to whoever started the run.
+	open = function(sender, transferId, data)
 		Noir.Msg("Running code(", Color(0, 120, 205), transferId, Color(255, 255, 255), "): ", -- ):
 			Color(230, 220, 115), data.identifier,
 			Color(255, 255, 255), " [",
@@ -222,5 +240,10 @@ Noir.Network.StringHandlers["runCode"] = {
 			ErrorNoHalt(Format("[%s] %s", data.identifier, returns))
 			print()
 		end
+	end,
+	-- Teardown: free the run context this endpoint created (keyed by initiator).
+	close = function(transferId, ch)
+		local contexts = Noir.Environment.Contexts[ch.opener]
+		if contexts then contexts[transferId] = nil end
 	end
 }

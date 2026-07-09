@@ -48,6 +48,18 @@ function PANEL:Init()
 	self.Actions = {}
 	self.Language = "glua"
 	self.HasOutput = false
+	-- id -> target for every run this panel started. Each run channel may keep
+	-- replying (hooks/timers), so we hold them all until the panel is removed, then
+	-- tear them down together.
+	self.ActiveTransfers = {}
+end
+
+function PANEL:OnRemove()
+	for id, target in pairs(self.ActiveTransfers or {}) do
+		Noir.Environment.CloseRun(id, target)
+	end
+
+	self.ActiveTransfers = {}
 end
 
 function PANEL:OnSizeChanged(newWidth, newHeight)
@@ -311,7 +323,7 @@ function PANEL:OnCode(code)
 	end
 
 	local identifier = "Noir.repl" .. self.ReplCounter
-	local id = Noir.Network.GenerateTransferId()
+	local id = Noir.Network.OpenChannel("runCode", self.Target)
 	self.ReplCounter = self.ReplCounter + 1
 	if not id then
 		Noir.Editor.MonacoPanel:SetStatus("Could not send code! See console for details", Color(150, 0, 0))
@@ -321,6 +333,7 @@ function PANEL:OnCode(code)
 	self.totalRan = 0
 	self.hasError = false
 	self.lastTransfer = id
+	self.ActiveTransfers[id] = self.Target
 	Noir.Environment.RegisterHandler(function(...)
 		local succ, err = pcall(self.OnMessage, self, self.Target, identifier, ...)
 		if not succ then self:AppendText(Format("--[[%s: Could not display output]] %s", identifier, err)) end
