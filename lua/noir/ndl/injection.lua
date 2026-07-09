@@ -2,20 +2,40 @@
 NDL.injections = NDL.injections or {}
 NDL.originalFuncs = NDL.originalFuncs or {}
 NDL.traces = NDL.traces or {}
--- Detour funcs should return true to prevent the original function from running
-function NDL.MakeDetour(originalFunc, detourFunc)
+
+-- Behaviors a detour func can return as its first value to control the original function.
+NDL.DETOUR_CONTINUE = "DETOUR_CONTINUE" -- Call the original with the untouched arguments (default).
+NDL.DETOUR_STOP = "DETOUR_STOP" -- Do not call the original; the remaining returned values are returned to the caller.
+NDL.DETOUR_PASS = "DETOUR_PASS" -- Call the original with a new argument list (the remaining returned values).
+
+-- Detour funcs return a behavior (see NDL.DETOUR_*) as their first value, followed by return
+-- values (DETOUR_STOP) or replacement arguments (DETOUR_PASS). For backwards compatibility a
+-- returned `true` maps to DETOUR_STOP and `false`/`nil` to DETOUR_CONTINUE.
+-- When passOriginal is true the detour func receives the original function as its first argument.
+function NDL.MakeDetour(originalFunc, detourFunc, passOriginal)
 	return function(...)
-		local succ, res = NDL.PCall(detourFunc, ...)
-		if succ then
-			local toDetour = table.remove(res, 1)
-			if toDetour == true then
-				return unpack(res)
-			else
-				return originalFunc(...)
-			end
+		local succ, res
+		if passOriginal then
+			succ, res = NDL.PCall(detourFunc, originalFunc, ...)
 		else
+			succ, res = NDL.PCall(detourFunc, ...)
+		end
+
+		if not succ then
 			NDL.Error("Error executing detour func: ", Color(200, 0, 0), res, "\n")
 			return originalFunc(...)
+		end
+
+		local behavior = table.remove(res, 1)
+
+		if behavior == NDL.DETOUR_STOP then
+			return unpack(res)
+		elseif behavior == NDL.DETOUR_PASS then
+			return originalFunc(unpack(res))
+		elseif behavior == NDL.DETOUR_CONTINUE then
+			return originalFunc(...)
+		else
+			return unpack({behavior, unpack(res)})
 		end
 	end
 end
@@ -38,11 +58,21 @@ function NDL.MakeArgsFilter(originalFunc, filterFunc)
 	end
 end
 
--- This one makes a call tracer with all kinds of metrics and calls additionalCallback with data after call
-function NDL.MakeCallTracer(originalFunc, name, additionalCallback)
+-- This one makes a call tracer with all kinds of metrics and calls additionalCallback with data after call.
+-- Passing a number as the last argument (in place of, or after, additionalCallback) limits how many
+-- calls are traced; once the limit is reached the original function is called directly without tracing.
+function NDL.MakeCallTracer(originalFunc, name, additionalCallback, limit)
+	if isnumber(additionalCallback) then
+		limit = additionalCallback
+		additionalCallback = nil
+	end
+
 	name = name or tostring(originalFunc)
 	NDL.traces[originalFunc] = NDL.traces[originalFunc] or {}
+	local count = 0
 	return function(...)
+		if limit and count >= limit then return originalFunc(...) end
+		count = count + 1
 		NDL.Msg("Traced function called ", Color(0, 150, 0), name, "\n")
 		NDL.Msg("ArgList: ")
 		local args = {...}
@@ -76,15 +106,25 @@ function NDL.MakeCallTracer(originalFunc, name, additionalCallback)
 	end
 end
 
-function NDL.MakeErrorTracer(originalFunc, name, additionalCallback)
+-- Passing a number as the last argument (in place of, or after, additionalCallback) limits how many
+-- errors are traced; once the limit is reached the original function is called directly.
+function NDL.MakeErrorTracer(originalFunc, name, additionalCallback, limit)
+	if isnumber(additionalCallback) then
+		limit = additionalCallback
+		additionalCallback = nil
+	end
+
 	name = name or tostring(originalFunc)
 	NDL.traces[originalFunc] = NDL.traces[originalFunc] or {}
+	local count = 0
 	return function(...)
+		if limit and count >= limit then return originalFunc(...) end
 		local startCall = SysTime()
 		local results = {pcall(originalFunc, ...)}
 		local finishCall = SysTime()
 		local success = table.remove(results, 1)
 		if success then return unpack(results) end
+		count = count + 1
 		NDL.Msg("Traced function had an error ", Color(0, 150, 0), name, "\n")
 		NDL.Msg("ArgList: ")
 		local args = {...}
@@ -110,34 +150,51 @@ function NDL.MakeErrorTracer(originalFunc, name, additionalCallback)
 	end
 end
 
--- Basically replace the original with new func and store the original for future referance
+-- Basically replace the original with new func and store the original for future referance.
+-- Injects stack: injecting over an existing inject pushes onto a per-(table, func) stack so overlapping
+-- injects can be unwound one layer at a time. NDL.originalFuncs[toInject] remembers whatever was in place
+-- (an original or a previous inject) so restoring returns exactly the layer below.
 function NDL.Inject(targetTbl, funcName, toInject)
 	local original = rawget(targetTbl, funcName)
 	if not original then return NDL.Error("Attempt to inject non-existent function") end
 	NDL.injections[targetTbl] = NDL.injections[targetTbl] or {}
-	NDL.injections[targetTbl][funcName] = toInject
+	local stack = NDL.injections[targetTbl][funcName] or {}
+	NDL.injections[targetTbl][funcName] = stack
+	stack[#stack + 1] = toInject
 	NDL.originalFuncs[toInject] = original
 	rawset(targetTbl, funcName, toInject)
 end
 
+-- Pops the top inject layer, restoring the table entry to whatever was underneath it.
 function NDL.RestoreInject(targetTbl, funcName)
-	if not NDL.injections[targetTbl] then return end
-	local currentFn = NDL.injections[targetTbl][funcName]
-	if not currentFn then return end
-	rawset(targetTbl, funcName, NDL.originalFuncs[currentFn])
+	local tblInjects = NDL.injections[targetTbl]
+	if not tblInjects then return end
+	local stack = tblInjects[funcName]
+	if not stack or #stack == 0 then return end
+	local top = table.remove(stack)
+	rawset(targetTbl, funcName, NDL.originalFuncs[top])
+	NDL.originalFuncs[top] = nil
+	if #stack == 0 then tblInjects[funcName] = nil end
 end
 
 function NDL.RestoreAllInjects()
-	for key, val in pairs(NDL.injections) do
-		for k, v in pairs(val) do
-			rawset(key, k, NDL.originalFuncs[v])
+	for targetTbl, funcs in pairs(NDL.injections) do
+		for funcName, stack in pairs(funcs) do
+			-- Restore straight to the bottom-most original and drop every layer's bookkeeping.
+			if stack[1] then rawset(targetTbl, funcName, NDL.originalFuncs[stack[1]]) end
+			for _, injected in ipairs(stack) do
+				NDL.originalFuncs[injected] = nil
+			end
 		end
 	end
+
+	NDL.injections = {}
 end
 
-function NDL.Detour(targetTbl, funcName, detourFunc)
+-- When passOriginal is true the detour func receives the original function as its first argument.
+function NDL.Detour(targetTbl, funcName, detourFunc, passOriginal)
 	local original = rawget(targetTbl, funcName)
-	NDL.Inject(targetTbl, funcName, NDL.MakeDetour(original, detourFunc))
+	NDL.Inject(targetTbl, funcName, NDL.MakeDetour(original, detourFunc, passOriginal))
 end
 
 function NDL.FilterArgs(targetTbl, funcName, filterFunc)

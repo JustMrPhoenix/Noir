@@ -1,7 +1,7 @@
 ﻿local Format = Noir.Format or {}
 Noir.Format = Format
 local fmt = _G.Format
-require("jit_decompiler")
+require("jit_decompiler2")
 local stringEscape = {
 	["\\"] = "\\\\",
 	["\0"] = "\\x00",
@@ -49,40 +49,21 @@ end
 
 function Format.DecompileFunc(func, level, doFull)
 	level = level or 0
-	local data = jit.decompiler.disassemble(func)
-	local debugInfo = debug.getinfo(func)
 	local levelIndent = string.rep("    ", level)
-	-- Generate named output with resolved constants and upvalues
-	local namedOutput = jit.decompiler.generate_named_output(data, Format.FormatShort)
-	-- Build the instruction string with named references
-	local instructionLines = {}
-	for _, entry in ipairs(namedOutput) do
-		local line_str = fmt("\n%s    %-3d: %-6s  %s", levelIndent, entry.index, entry.op or "?", entry.code)
-		if entry.line and entry.line > 0 then line_str = line_str .. fmt("  -- line %d", entry.line) end
-		instructionLines[#instructionLines + 1] = line_str
+	local debugInfo = debug.getinfo(func)
+	-- Reconstruct readable pseudo-Lua; falls back internally to an annotated
+	-- listing per function when structuring is not possible.
+	local src, decErr = jit.decompiler2.decompile(func, {indent = levelIndent, indentUnit = "    ", formatValue = Format.FormatShort})
+	if not src then
+		src = fmt("%sfunction() --[[ cannot decompile: %s ]] end", levelIndent, tostring(decErr))
+	elseif doFull then
+		local listing = jit.decompiler2.disassemble(func, {indent = levelIndent .. "    ", formatValue = Format.FormatShort})
+		if listing then
+			src = fmt("%s\n%s--[[ bytecode:\n%s\n%s]]", src, levelIndent, listing, levelIndent)
+		end
 	end
 
-	local insruction_string = table.concat(instructionLines)
-
-	local args_str
-	if debugInfo.isvararg then
-		args_str = "..."
-	else
-		local _, args = getlocals(func)
-		args_str = table.concat(args, ",")
-	end
-
-	-- Show upvalue names
-	local upvalNames = {}
-	for idx, name in pairs(data.upvalues) do
-		table.insert(upvalNames, fmt("%d: %s", idx, name))
-	end
-
-	local upvalStr = #upvalNames > 0 and table.concat(upvalNames, ", ") or "none"
-	return fmt(
-		"function(%s) -- %p\n%s-- upvalues: %s%s\n%send",
-		args_str, func, levelIndent .. "    ", upvalStr, insruction_string, levelIndent
-	), formatSource(debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
+	return src, formatSource(debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
 end
 
 function Format.FormatShort(val)
@@ -159,18 +140,18 @@ function Format.DeepFind(root, opts)
 	-- Returns a short description of what matched, or nil.
 	local function funcReason(fn)
 		if debug.getinfo(fn, "S").what == "C" then return end
-		local ok, data = pcall(jit.decompiler.disassemble, fn)
-		if not ok then return end
+		local ok, data = pcall(jit.decompiler2.metadata, fn)
+		if not ok or not data then return end
 		local hits = {}
-		for _, v in pairs(data.consts) do
-			if isstring(v) and matches(v) then hits[#hits + 1] = fmt("const \"%s\"", v) end
+		for _, v in ipairs(data.stringConsts) do
+			if matches(v) then hits[#hits + 1] = fmt("const \"%s\"", v) end
 		end
-		for _, name in pairs(data.upvalues) do
+		for _, name in pairs(data.upvalueNames) do
 			if matches(name) then hits[#hits + 1] = "upval " .. name end
 		end
 		for idx, v in pairs(data.upvalueValues) do
 			if not istable(v) and matches(v) then
-				hits[#hits + 1] = fmt("upval %s = %s", data.upvalues[idx] or idx, Format.FormatShort(v))
+				hits[#hits + 1] = fmt("upval %s = %s", data.upvalueNames[idx] or idx, Format.FormatShort(v))
 			end
 		end
 		for _, name in pairs(data.paramNames) do

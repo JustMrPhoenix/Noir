@@ -117,6 +117,7 @@ function Noir.Load()
 	loadModule("client/editor/menus.lua")
 	loadModule("client/editor/sidebar.lua")
 	loadModule("client/editor/run.lua")
+	loadModule("client/editor/loading.lua")
 	loadModule("client/editor/frame.lua")
 	loadModule("client/repl.lua")
 	loadModule("client/entity_selector.lua")
@@ -147,6 +148,7 @@ if SERVER then
 	end
 
 	AddCSLuaFile("includes/modules/jit_decompiler.lua")
+	AddCSLuaFile("includes/modules/jit_decompiler2.lua")
 end
 
 Noir.Load()

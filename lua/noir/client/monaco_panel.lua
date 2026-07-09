@@ -92,7 +92,6 @@ function PANEL:Init()
 	self.Actions = {}
 	self.LastReportEvents = {}
 	self.Ready = false
-	self.LoadingAngle = 0
 end
 
 function PANEL:RequestFocus()
@@ -283,43 +282,6 @@ function PANEL:Think()
 	-- Wait for user to stop editing and then validate
 	if self.SHOULD_VALIDATE and self.LastEdit + self.VALIDATE_COOLDOWN < CurTime() and self.LastValidated < self.LastEdit then
 		self:ValidateCode()
-	end
-end
-
-function PANEL:PaintOver(w, h)
-	if self.Ready then return end
-	local cx, cy = w / 2, (h - 20) / 2
-	local radius = math.max(16, math.min(w, h) * 0.05)
-	local thickness = math.max(2, radius * 0.16)
-	local segments = 64
-	local arcSpan = 140 -- degrees of the bright sweeping arc
-	self.LoadingAngle = (self.LoadingAngle or 0) + RealFrameTime() * 220
-	local head = self.LoadingAngle % 360
-	local rOuter, rInner = radius + thickness / 2, radius - thickness / 2
-	draw.NoTexture()
-	for i = 0, segments - 1 do
-		local a1 = (i / segments) * math.pi * 2
-		local a2 = ((i + 1) / segments) * math.pi * 2
-		local aDeg = (i / segments) * 360
-		-- Distance behind the rotating head, wrapping around.
-		local d = (head - aDeg + 360) % 360
-		local alpha
-		if d < arcSpan then
-			alpha = 255 * (1 - d / arcSpan)
-		else
-			alpha = 28 -- faint track
-		end
-
-		local cos1, sin1 = math.cos(a1), math.sin(a1)
-		local cos2, sin2 = math.cos(a2), math.sin(a2)
-		local poly = {
-			{ x = cx + rOuter * cos1, y = cy + rOuter * sin1 },
-			{ x = cx + rOuter * cos2, y = cy + rOuter * sin2 },
-			{ x = cx + rInner * cos2, y = cy + rInner * sin2 },
-			{ x = cx + rInner * cos1, y = cy + rInner * sin1 },
-		}
-		surface.SetDrawColor(204, 204, 204, alpha)
-		surface.DrawPoly(poly)
 	end
 end
 

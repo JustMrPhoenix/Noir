@@ -1,1 +1,4 @@
 .vscode/*
+
+# Decompiler development tooling & test harness (not shipped)
+/dev/

@@ -14,6 +14,19 @@ function Editor.SetFocusAlpha(hasFocus)
 	if Editor.ActiveSession and IsValid(Editor.ActiveSession.ReplPanel) then Editor.ActiveSession.ReplPanel:SetAlpha(a) end
 end
 
+-- True once the Monaco editor and every open console REPL panel have finished
+-- loading. The loading overlay stays up until this returns true. Console panels are
+-- created inside monaco.OnReady, so this naturally waits for Monaco to load first
+-- and then for each restored/opened console to catch up.
+function Editor.AllPanelsReady()
+	if not (IsValid(Editor.MonacoPanel) and Editor.MonacoPanel.Ready) then return false end
+	for _, console in pairs(Editor.Console.Sessions or {}) do
+		if IsValid(console.ReplPanel) and not console.ReplPanel.Ready then return false end
+	end
+
+	return true
+end
+
 function Editor.UI.CreateFrame()
 	-- There is alot of hacky vgui stuff here
 	-- im just trying to get as close to vs-code look as possible
@@ -331,7 +344,18 @@ function Editor.UI.CreateFrame()
 			if session.sessionType ~= "console" then table.insert(editorSessions, session) end
 		end
 
-		monaco:LoadSessions(editorSessions, activeSession)
+		-- Monaco only knows editor sessions. If the active tab is a console (e.g.
+		-- Main Console), pointing Monaco's newActive at it triggers a JS-side
+		-- "Cant find session named ..." error, so hand Monaco the first editor
+		-- session instead. Editor.Tab.SetActive below still shows the correct
+		-- console panel.
+		local monacoActive = activeSession
+		local activeObj = Editor.SessionsByName[activeSession]
+		if not activeObj or activeObj.sessionType == "console" then
+			monacoActive = editorSessions[1] and editorSessions[1].name or nil
+		end
+
+		monaco:LoadSessions(editorSessions, monacoActive)
 		-- Set the active tab (noJS=true since Monaco already has the session from LoadSessions)
 		Editor.Tab.SetActive(activeSession, true)
 		-- monaco:CloseSession("Unnamed")
@@ -376,4 +400,10 @@ function Editor.UI.CreateFrame()
 		Editor.Config.editorSize = {frame:GetSize()}
 		Editor.SetFocusAlpha(hasFocus)
 	end
+
+	-- Single loading screen over the whole frame; removes itself once the Monaco
+	-- editor and any open console panels are all ready (see Editor.AllPanelsReady).
+	local loadingOverlay = frame:Add("NoirLoadingOverlay")
+	loadingOverlay:SetReadyCheck(Editor.AllPanelsReady)
+	Editor.LoadingOverlay = loadingOverlay
 end

@@ -1,4 +1,4 @@
 {
 	"lint_maxScopeDepth": 0,
-	"lint_ignoreFiles": ["**/includes/modules/**"]
+	"lint_ignoreFiles": ["**/includes/modules/luacheck*", "**/includes/modules/jit_decompiler.lua"]
 }
