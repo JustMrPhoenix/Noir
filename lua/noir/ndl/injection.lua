@@ -2,6 +2,18 @@
 NDL.injections = NDL.injections or {}
 NDL.originalFuncs = NDL.originalFuncs or {}
 NDL.traces = NDL.traces or {}
+-- Cap on retained trace records per traced function. Tracers keep every call's
+-- args/returns/traceback; without a bound this grows forever on a hot function
+-- (and pins any captured entities/tables). Oldest records are dropped past this.
+NDL.MaxTraceRecords = NDL.MaxTraceRecords or 1000
+
+-- Append a trace record for a traced function, dropping the oldest once the
+-- per-function cap is exceeded so the history stays bounded.
+local function pushTrace(originalFunc, TraceData)
+	local records = NDL.traces[originalFunc]
+	records[#records + 1] = TraceData
+	if #records > NDL.MaxTraceRecords then table.remove(records, 1) end
+end
 
 -- Behaviors a detour func can return as its first value to control the original function.
 NDL.DETOUR_CONTINUE = "DETOUR_CONTINUE" -- Call the original with the untouched arguments (default).
@@ -100,7 +112,7 @@ function NDL.MakeCallTracer(originalFunc, name, additionalCallback, limit)
 			trace = trace
 		}
 
-		table.insert(NDL.traces[originalFunc], TraceData)
+		pushTrace(originalFunc, TraceData)
 		if additionalCallback and isfunction(additionalCallback) then additionalCallback(TraceData) end
 		return unpack(returns)
 	end
@@ -144,7 +156,7 @@ function NDL.MakeErrorTracer(originalFunc, name, additionalCallback, limit)
 			trace = trace
 		}
 
-		table.insert(NDL.traces[originalFunc], TraceData)
+		pushTrace(originalFunc, TraceData)
 		if additionalCallback and isfunction(additionalCallback) then additionalCallback(TraceData) end
 		error(results[1])
 	end
@@ -172,8 +184,12 @@ function NDL.RestoreInject(targetTbl, funcName)
 	local stack = tblInjects[funcName]
 	if not stack or #stack == 0 then return end
 	local top = table.remove(stack)
-	rawset(targetTbl, funcName, NDL.originalFuncs[top])
+	local original = NDL.originalFuncs[top]
+	rawset(targetTbl, funcName, original)
 	NDL.originalFuncs[top] = nil
+	-- Free any accumulated trace history for this layer (tracers key NDL.traces by
+	-- the function they wrapped, i.e. whatever was underneath = `original`).
+	if original ~= nil then NDL.traces[original] = nil end
 	if #stack == 0 then tblInjects[funcName] = nil end
 end
 
@@ -189,6 +205,8 @@ function NDL.RestoreAllInjects()
 	end
 
 	NDL.injections = {}
+	-- Every inject is gone, so no trace history is reachable through a live tracer.
+	NDL.traces = {}
 end
 
 -- When passOriginal is true the detour func receives the original function as its first argument.

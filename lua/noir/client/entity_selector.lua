@@ -107,6 +107,13 @@ end
 --------------------------------------------------------------------------------
 local function drawPickModeHUD()
 	if not EntitySelector.PickMode then return end
+	-- Self-heal: if the owning panel was removed while picking, tear pick mode down
+	-- (restoring hidden panels and removing the hooks) instead of running forever.
+	if EntitySelector.PickOwner and not IsValid(EntitySelector.PickOwner) then
+		EntitySelector.StopPickMode()
+		return
+	end
+
 	local w, h = ScrW(), ScrH()
 	local cx, cy = w / 2, h / 2
 	-- Header overlay
@@ -160,6 +167,10 @@ function EntitySelector.StartPickMode(options)
 	if EntitySelector.PickMode then EntitySelector.StopPickMode() end
 	EntitySelector.PickMode = true
 	EntitySelector.PickOptions = options
+	-- Optional owning panel. If it goes invalid while picking (e.g. the caller's
+	-- frame is removed by another path), the per-frame HUD hook self-heals by
+	-- stopping pick mode, so the hooks and hidden-panel refs don't linger.
+	EntitySelector.PickOwner = options.owner
 	EntitySelector.HiddenPanels = {}
 	-- Hide all top-level panels
 	for _, panel in ipairs(vgui.GetWorldPanel():GetChildren()) do
@@ -191,6 +202,7 @@ function EntitySelector.StopPickMode()
 	end
 
 	EntitySelector.PickOptions = nil
+	EntitySelector.PickOwner = nil
 end
 
 function EntitySelector.IsPickMode()
@@ -302,6 +314,7 @@ function EntitySelector.Open(options)
 
 	viewBtn.DoClick = function()
 		EntitySelector.StartPickMode({
+			owner = frame,
 			filter = options.filter,
 			onSelect = function(ent) selectEntity(ent) end,
 			onCancel = function()

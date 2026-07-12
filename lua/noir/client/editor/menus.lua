@@ -5,7 +5,20 @@ Editor.UI = Editor.UI or {}
 -- Builds the editor's menu bar (File / Run / View buttons + the tab context menu)
 -- onto the given frame. Extracted from Editor.UI.CreateFrame; all the DermaMenu
 -- locals stay scoped here and shared handles are stored on Editor.UI / Editor.Tab.
+-- The menu-bar DermaMenus are top-level panels parented to the world panel (not the
+-- frame) with SetDeleteSelf(false), so frame:Remove() doesn't take them with it.
+-- Track them and remove them explicitly on rebuild / reload teardown.
+function Editor.UI.RemoveMenus()
+	for _, menu in ipairs(Editor.UI.Menus or {}) do
+		if IsValid(menu) then menu:Remove() end
+	end
+
+	Editor.UI.Menus = {}
+end
+
 function Editor.UI.BuildMenuBar(frame)
+	-- Drop any menus from a previous frame build before creating new ones.
+	Editor.UI.RemoveMenus()
 	local menuX = 5
 	local fileMenuButton = frame:Add("DButton")
 	fileMenuButton:SetTall(24)
@@ -15,6 +28,7 @@ function Editor.UI.BuildMenuBar(frame)
 	fileMenuButton:SetIsMenu(true)
 	menuX = menuX + fileMenuButton:GetWide()
 	local fileMenu = DermaMenu()
+	Editor.UI.Menus[#Editor.UI.Menus + 1] = fileMenu
 	fileMenu:SetSkin("Noir")
 	-- fileMenu:SetDark(true)
 	fileMenu:SetDeleteSelf(false)
@@ -71,6 +85,7 @@ function Editor.UI.BuildMenuBar(frame)
 	runMenuButton:SetIsMenu(true)
 	menuX = menuX + runMenuButton:GetWide()
 	local runMenu = DermaMenu()
+	Editor.UI.Menus[#Editor.UI.Menus + 1] = runMenu
 	runMenu:SetSkin("Noir")
 	runMenu:SetDeleteSelf(false)
 	runMenu:SetDrawColumn(true)
@@ -148,6 +163,7 @@ function Editor.UI.BuildMenuBar(frame)
 	viewMenuButton:SizeToContentsX(16)
 	viewMenuButton:SetIsMenu(true)
 	local viewMenu = DermaMenu()
+	Editor.UI.Menus[#Editor.UI.Menus + 1] = viewMenu
 	viewMenu:SetSkin("Noir")
 	viewMenu:SetDeleteSelf(false)
 	viewMenu:SetDrawColumn(true)
@@ -182,6 +198,7 @@ function Editor.UI.BuildMenuBar(frame)
 	end
 
 	local tabMenu = DermaMenu()
+	Editor.UI.Menus[#Editor.UI.Menus + 1] = tabMenu
 	tabMenu:SetSkin("Noir")
 	tabMenu:SetDeleteSelf(false)
 	tabMenu:SetDrawColumn(true)

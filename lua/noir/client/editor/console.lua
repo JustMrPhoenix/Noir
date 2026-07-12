@@ -45,6 +45,7 @@ function Editor.Console.CreateTab(consoleName, isMain)
 		replPanel.IsMainConsole = isMain or false
 		replPanel.Session = session
 		Editor.Console.ApplySessionLanguage(replPanel, session)
+		Editor.Console.ApplySessionTarget(replPanel, session)
 		replPanel.OnMousePressed = function(_, ...)
 			if Editor.Frame.Maximized then return end
 			Editor.Frame:OnMousePressed(...)
@@ -70,9 +71,35 @@ function Editor.Console.ApplySessionLanguage(replPanel, session)
 	local langId = session.language
 	if not langId or langId == "glua" then return end
 	replPanel.Language = langId
+	replPanel:UpdateLanguageCombo(langId)
+	-- JS collapses the target selector to "This console".
+	replPanel:UpdateTargetCombo()
 	local function apply()
 		replPanel:RunJS("replinterface.SetLanguage(%q)", langId)
 		replPanel:RunJS("replinterface.ResetAutocompletion()")
+	end
+
+	if replPanel.Ready then
+		apply()
+	else
+		local prevOnReady = replPanel.OnReady
+		replPanel.OnReady = function(pnl)
+			if prevOnReady then prevOnReady(pnl) end
+			apply()
+		end
+	end
+end
+
+-- Restore a console's persisted run target onto its REPL panel. Deferred until
+-- the panel is ready (SetTarget issues JS autocomplete calls), and only for Lua
+-- consoles -- the run target is a Lua concept and would otherwise clobber a JS
+-- console's autocomplete state.
+function Editor.Console.ApplySessionTarget(replPanel, session)
+	local target = session.target
+	if not target or target == "self" then return end
+	if session.language and session.language ~= "glua" then return end
+	local function apply()
+		replPanel:ApplyTarget(target)
 	end
 
 	if replPanel.Ready then

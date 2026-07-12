@@ -6,6 +6,9 @@ cvars.AddChangeCallback("noir_debug", function(cvar, old, new) Noir.DEBUG = Noir
 local reload = function(fullReload)
 	if CLIENT then
 		if IsValid(Noir.Editor.Frame) then Noir.Editor.Frame:Remove() end
+		-- The editor's menu-bar DermaMenus are detached from the frame, so remove them
+		-- separately or they leak on every reload (see Editor.UI.RemoveMenus).
+		if Noir.Editor.UI and Noir.Editor.UI.RemoveMenus then Noir.Editor.UI.RemoveMenus() end
 		if IsValid(Noir.FileBrowser.Frame) then Noir.FileBrowser.Frame:Remove() end
 		if IsValid(Noir.ReplFrame) then Noir.ReplFrame:Remove() end
 		if IsValid(Noir.Dashboard) and IsValid(Noir.Dashboard.Frame) then Noir.Dashboard.Frame:Remove() end

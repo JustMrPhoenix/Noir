@@ -258,8 +258,7 @@ end
 
 -- Get display name for a script
 function Autorun.GetDisplayName(script)
-	local name = string.GetFileFromFilename(script.file) or script.file
-	return Format("[%s] [%s] %s", Autorun.RealmLabel(script.target), script.path, name)
+	return Format("[%s] [%s] %s", Autorun.RealmLabel(script.target), script.path, script.file)
 end
 
 -- Register Dashboard settings
@@ -272,7 +271,7 @@ function Autorun.RegisterDashboard()
 		if Noir.Editor and Noir.Editor.Config and Noir.Editor.Config.recentFiles then
 			for _, recent in ipairs(Noir.Editor.Config.recentFiles) do
 				table.insert(suggestions, {
-					label = Format("[%s] %s", recent[1], string.GetFileFromFilename(recent[2]) or recent[2]),
+					label = Format("[%s] %s", recent[1], recent[2]),
 					value = {
 						path = recent[1],
 						file = recent[2],
@@ -351,8 +350,7 @@ function Autorun.RegisterDashboard()
 		end,
 		displayFormatter = function(item)
 			if istable(item) and item.path and item.file then
-				local name = string.GetFileFromFilename(item.file) or item.file
-				return Format("[%s] [%s] %s", Autorun.RealmLabel(item.target), item.path, name)
+					return Format("[%s] [%s] %s", Autorun.RealmLabel(item.target), item.path, item.file)
 			end
 			return tostring(item)
 		end,

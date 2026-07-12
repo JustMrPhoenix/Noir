@@ -127,6 +127,15 @@ Dashboard.Types = {
 	}
 }
 
+-- Drop every OnChange callback registered under a tab. Used by both Unregister and
+-- Register so one registration cycle always yields one set of callbacks -- callers
+-- that re-register on reload can't silently stack duplicates.
+function Dashboard.ClearCallbacks(tabName)
+	for fullKey in pairs(Dashboard.Callbacks) do
+		if string.StartWith(fullKey, tabName .. ".") then Dashboard.Callbacks[fullKey] = nil end
+	end
+end
+
 --[[
 	Register settings for a script tab
 
@@ -140,6 +149,9 @@ function Dashboard.Register(tabName, settings, options)
 		return false
 	end
 
+	-- A re-register starts a fresh callback generation; drop any prior OnChange
+	-- callbacks for this tab so the caller's follow-up OnChange calls don't stack.
+	Dashboard.ClearCallbacks(tabName)
 	options = options or {}
 	-- Preserve original registration order if tab already exists (for hot-reload stability)
 	local existingReg = Dashboard.Registrations[tabName]
@@ -209,10 +221,7 @@ end
 
 function Dashboard.Unregister(tabName)
 	Dashboard.Registrations[tabName] = nil
-	for fullKey, _ in pairs(Dashboard.Callbacks) do
-		if string.StartWith(fullKey, tabName .. ".") then Dashboard.Callbacks[fullKey] = nil end
-	end
-
+	Dashboard.ClearCallbacks(tabName)
 	if IsValid(Dashboard.Frame) then Dashboard.RefreshTabs() end
 end
 
@@ -945,6 +954,7 @@ function Dashboard.CreateControl(parent, setting, tabName)
 		pickBtn.HoveredColor = Color(25, 100, 150)
 		pickBtn.DoClick = function()
 			Noir.EntitySelector.StartPickMode({
+				owner = Dashboard.Frame,
 				filter = setting.filter,
 				onSelect = function(ent)
 					Dashboard.Set(tabName, setting.key, ent)

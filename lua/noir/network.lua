@@ -7,6 +7,11 @@ local UIntSize = 3
 -- travels alongside -- so a single-chunk payload plus its metadata fits in one
 -- message. That's exactly what the "quick" frame relies on.
 local MAX_CHUNK_SIZE = 61440
+-- Seconds an in-flight reassembly/routing entry may sit without receiving a part
+-- before the reaper drops it. Parts are staggered 0.2s apart, so even a large
+-- transfer refreshes lastActivity well within this; a stalled/abandoned transfer
+-- (sender crash, dropped part, rejected-but-never-finished stream) gets reaped.
+local TRANSFER_TTL = 30
 Network.Tag = tag
 Network.UIntSize = UIntSize
 -- The net.Receivers string table only has 2048 slots, so everything rides one
@@ -62,6 +67,40 @@ end
 local function senderKey(sender)
 	return sender ~= Entity(0) and sender:SteamID() or "SERVER"
 end
+
+-- Human-readable origin for logging (e.g. reaped stuck transfers, so malicious spam
+-- from a specific player is identifiable). Tolerates an already-disconnected sender.
+local function senderName(sender)
+	if not sender or sender == Entity(0) then return "SERVER" end
+	if not IsValid(sender) then return "disconnected player" end
+	return Format("%s (%s)", sender:Nick(), sender:SteamID())
+end
+
+-- Backstop reaper for stuck transfers. Assembly (both realms) and Routing (server)
+-- entries are normally freed on completion, channel close, or PlayerDisconnected;
+-- an interrupted chunked transfer on a long-lived channel would otherwise keep its
+-- partial buffer forever. Drop anything idle past TRANSFER_TTL. timer.Create replaces
+-- by name, so a reload refreshes this closure (new upvalues) without stacking timers.
+timer.Create("Noir.Network.Reap", 10, 0, function()
+	local now = CurTime()
+	for key, asm in pairs(Network.Assembly) do
+		if now - (asm.lastActivity or now) > TRANSFER_TTL then
+			Network.Assembly[key] = nil
+			Noir.Debug("Reaped stuck reassembly ", key, " from ", senderName(asm.sender),
+				" (", asm.got, "/", asm.parts, " parts)")
+		end
+	end
+
+	for key, r in pairs(Network.Routing) do
+		if now - (r.lastActivity or now) > TRANSFER_TTL then
+			Network.Routing[key] = nil
+			-- A dropped (auth-rejected) entry that then stalled means a client sent a
+			-- header it wasn't allowed to and abandoned the parts -- worth surfacing.
+			Noir.Debug("Reaped stuck routing ", key, " from ", senderName(r.sender),
+				r.drop and " [rejected]" or "", " (", r.got, "/", r.parts, " parts)")
+		end
+	end
+end)
 
 local function assemblyKey(sender, channelId, seq)
 	return senderKey(sender) .. "/" .. channelId .. "/" .. seq
@@ -236,6 +275,7 @@ local function startAssembly(sender, channelId, op, message, seq, parts, crc, le
 		extra = extra,
 		buf = "",
 		got = 0,
+		lastActivity = CurTime(),
 	}
 end
 
@@ -245,6 +285,7 @@ local function assemblyPart(sender, channelId, seq, chunk)
 	if not asm then return end
 	asm.buf = asm.buf .. chunk
 	asm.got = asm.got + 1
+	asm.lastActivity = CurTime()
 	if asm.got < asm.parts then return end
 	Network.Assembly[key] = nil
 	if util.CRC(asm.buf) ~= asm.crc then
@@ -461,7 +502,7 @@ local function serverHandleHeader(sender, channelId, op, message, seq, parts, cr
 	local ch = Network.Channels[channelId]
 	if op == "open" then
 		if not Network.CheckAccess(sender, extra.target, {channelOp = "open"}) then
-			Network.Routing[key] = {drop = true, parts = parts, got = 0}
+			Network.Routing[key] = {drop = true, parts = parts, got = 0, lastActivity = CurTime(), sender = sender}
 			return
 		end
 
@@ -484,7 +525,7 @@ local function serverHandleHeader(sender, channelId, op, message, seq, parts, cr
 
 	local remote = resolveRemote(dst)
 	local toLocal = isLocalDest(dst)
-	Network.Routing[key] = {remote = remote, isLocal = toLocal, parts = parts, got = 0}
+	Network.Routing[key] = {remote = remote, isLocal = toLocal, parts = parts, got = 0, lastActivity = CurTime(), sender = sender}
 	if remote then emitHeader(sender, remote, channelId, op, message, seq, parts, crc, len, extra) end
 	if toLocal then startAssembly(sender, channelId, op, message, seq, parts, crc, len, extra) end
 	-- A one-shot channel we only relay (not an endpoint of) needs no persistent
@@ -501,6 +542,7 @@ local function serverHandlePart(sender, channelId, seq, chunk)
 	local r = Network.Routing[key]
 	if not r then return end
 	r.got = r.got + 1
+	r.lastActivity = CurTime()
 	if not r.drop then
 		if r.remote then emitPart(sender, r.remote, channelId, seq, chunk) end
 		if r.isLocal then assemblyPart(sender, channelId, seq, chunk) end

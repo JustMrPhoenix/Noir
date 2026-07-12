@@ -36,6 +36,16 @@ function Editor.RegisterActions(panel)
 	panel:AddAction("replSwitchJS", "Console: Switch to JavaScript", function(p)
 		if p.SwitchLanguage then p:SwitchLanguage("javascript") end
 	end, "Mod.CtrlCmd | Mod.Alt | Key.KeyJ")
+
+	-- REPL-only: Tab cycles the run target, but only on an empty input line (the
+	-- `replInputEmpty` precondition falls through to Monaco's default Tab otherwise).
+	-- Gated on CycleTarget so plain Tab is never bound on the Monaco editor panel.
+	if panel.CycleTarget then
+		panel:AddAction("cycleReplTarget", "Console: Cycle run target",
+			function(p) p:CycleTarget(1) end, "Key.Tab", "replInputEmpty")
+		panel:AddAction("cycleReplTargetBack", "Console: Cycle run target (reverse)",
+			function(p) p:CycleTarget(-1) end, "Mod.Shift | Key.Tab", "replInputEmpty")
+	end
 	panel:AddAction("newConsole", "Noir: New Console Tab", function()
 		local session = Editor.Console.CreateTab()
 		Editor.Tab.SetActive(session.name)

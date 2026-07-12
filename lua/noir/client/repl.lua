@@ -1,5 +1,31 @@
 ﻿local PANEL = {}
 PANEL.Base = "EditablePanel"
+
+-- Ordered fixed targets that Tab cycles through in the REPL input (specific
+-- players remain reachable only via the dropdown).
+local CYCLE_TARGETS = {
+	{ label = "Run on self", target = "self", icon = "icon16/user.png" },
+	{ label = "Run on server", target = "server", icon = "icon16/server.png" },
+	{ label = "Run on clients", target = "clients", icon = "icon16/group.png" },
+	{ label = "Run on shared", target = "shared", icon = "icon16/world.png" },
+}
+
+-- The REPL only evaluates Lua or JavaScript (unlike the editor's richer set).
+local LANGUAGE_CHOICES = {
+	{ "Lua", "glua" },
+	{ "JS", "javascript" },
+}
+local LANGUAGE_LABELS = {}
+for _, choice in ipairs(LANGUAGE_CHOICES) do
+	LANGUAGE_LABELS[choice[2]] = choice[1]
+end
+local LANGUAGE_COMBO_WIDTH = 70
+
+-- In JS mode code runs locally in this console; the run target selector collapses
+-- to a single entry (more JS targets may be added later).
+local JS_TARGET_LABEL = "This console"
+local JS_TARGET_ICON = "icon16/application_xp_terminal.png"
+
 PANEL.URL = Noir.DEBUG and "http://loopback.bestboy.moe:8080/repl.html" or "https://metastruct.github.io/gmod-monaco/repl.html"
 function PANEL:Init()
 	local html = self:Add("DHTML")
@@ -10,7 +36,9 @@ function PANEL:Init()
 	self:SetPaintBackgroundEnabled(true)
 	local statusButton = self:Add("DButton")
 	statusButton:SetSkin("Noir")
-	statusButton:DockMargin(150, 0, 15, 0)
+	-- Leave room on the left for the target combobox and on the right for the
+	-- language combobox (both floated in OnSizeChanged).
+	statusButton:DockMargin(150, 0, LANGUAGE_COMBO_WIDTH + 15, 0)
 	statusButton:Dock(BOTTOM)
 	statusButton:SetHeight(20)
 	statusButton:SetColor(Color(255, 255, 255))
@@ -42,8 +70,26 @@ function PANEL:Init()
 		comboBox.Menu:Open(x, y, false, comboBox)
 	end
 
+	-- Bottom-right language selector, mirroring the editor's (monaco_panel.lua).
+	local langCombo = self:Add("DComboBox")
+	langCombo:SetSkin("Noir")
+	langCombo:SetTextColor(Color(200, 200, 200))
+	langCombo:SetSortItems(false)
+	for _, choice in ipairs(LANGUAGE_CHOICES) do
+		langCombo:AddChoice(choice[1], choice[2])
+	end
+
+	langCombo:SetValue("Lua")
+	self.LanguageCombo = langCombo
+	langCombo.OnSelect = function(_, _, _, langId)
+		if self.SuppressLangSelect then return end
+		self:SwitchLanguage(langId)
+	end
+
 	self:RequestFocus()
 	self.Target = "self"
+	self.TargetLabel = "Run on self"
+	self.TargetIcon = "icon16/user.png"
 	self.ReplCounter = 0
 	self.Actions = {}
 	self.Language = "glua"
@@ -64,6 +110,10 @@ end
 
 function PANEL:OnSizeChanged(newWidth, newHeight)
 	self.TargetCombobox:SetPos(0, newHeight - 20)
+	if IsValid(self.LanguageCombo) then
+		self.LanguageCombo:SetSize(LANGUAGE_COMBO_WIDTH, 20)
+		self.LanguageCombo:SetPos(newWidth - LANGUAGE_COMBO_WIDTH, newHeight - 20)
+	end
 end
 
 function PANEL:Paint(w, h)
@@ -79,6 +129,14 @@ function PANEL:FillMenu()
 	runMenu:Hide()
 	self.RunMenu = runMenu
 	self.TargetCombobox.Menu = runMenu
+	if self.Language == "javascript" then
+		-- JS runs in this console only; one target for now.
+		local option = runMenu:AddOption(JS_TARGET_LABEL, function() end)
+		option:SetIcon(JS_TARGET_ICON)
+		option:SetTextColor(Color(200, 200, 200))
+		return
+	end
+
 	self:AddRunOption("Run on self", "self", "icon16/user.png")
 	self:AddRunOption("Run on server", "server", "icon16/server.png")
 	local runOnSubmenu, runOnMenu = runMenu:AddSubMenu("Run on client")
@@ -93,34 +151,86 @@ function PANEL:FillMenu()
 
 	self:AddRunOption("Run on clients", "clients", "icon16/group.png")
 	self:AddRunOption("Run on shared", "shared", "icon16/world.png")
-	-- Language switching sits apart from the run targets: it changes what the
-	-- console evaluates (Lua vs JS), not where Lua runs.
-	runMenu:AddSpacer()
+end
+
+-- Reflect the active language in the selector without triggering OnSelect.
+function PANEL:UpdateLanguageCombo(langId)
+	if not IsValid(self.LanguageCombo) then return end
+	self.SuppressLangSelect = true
+	self.LanguageCombo:SetValue(LANGUAGE_LABELS[langId] or langId or "Lua")
+	self.SuppressLangSelect = false
+end
+
+-- Show the current target (or "This console" in JS mode) in the combobox.
+function PANEL:UpdateTargetCombo()
 	if self.Language == "javascript" then
-		local luaOption = runMenu:AddOption("Switch to Lua", function() self:SwitchLanguage("glua") end)
-		luaOption:SetIcon("icon16/page_white_text.png")
-		luaOption:SetTextColor(Color(200, 200, 200))
+		self.TargetCombobox:SetIcon(JS_TARGET_ICON)
+		self.TargetCombobox:SetText(JS_TARGET_LABEL)
 	else
-		local jsOption = runMenu:AddOption("Switch to JavaScript", function() self:SwitchLanguage("javascript") end)
-		jsOption:SetIcon("icon16/script_code.png")
-		jsOption:SetTextColor(Color(200, 200, 200))
+		self.TargetCombobox:SetIcon(self.TargetIcon or "icon16/user.png")
+		self.TargetCombobox:SetText(self.TargetLabel or "Run on self")
 	end
+end
+
+-- Switch the run target and refresh the combobox + autocomplete state. Shared
+-- by the dropdown options and the Tab cycling.
+function PANEL:SetTarget(label, target, icon)
+	self.Target = target
+	self.TargetLabel = label
+	self.TargetIcon = icon
+	self:UpdateTargetCombo()
+	self:RunJS("replinterface.ResetAutocompletion()")
+	if target == "server" then
+		self:RunJS("replinterface.LoadAutocompleteState(\"Server\")")
+	elseif target == "shared" then
+		self:RunJS(Noir.Autocomplete.GetJSWithState("Shared", "replinterface"))
+	else
+		self:RunJS(Noir.Autocomplete.GetJSWithState("Client", "replinterface"))
+	end
+
+	-- Persist the fixed string targets (self/server/shared/clients) so the choice
+	-- survives restarts. Specific players (Entity targets) are intentionally not
+	-- persisted.
+	if self.Session and isstring(target) then
+		self.Session.target = target
+		Noir.Editor.Storage.QueueSave()
+	end
+end
+
+-- Restore a persisted fixed run target onto this panel. Unknown/absent values
+-- (e.g. a previously selected player) are ignored.
+function PANEL:ApplyTarget(target)
+	if not target then return end
+	for _, t in ipairs(CYCLE_TARGETS) do
+		if t.target == target then
+			self:SetTarget(t.label, t.target, t.icon)
+			return
+		end
+	end
+end
+
+-- Advance the run target by `dir` (+1 / -1) through CYCLE_TARGETS, wrapping. A
+-- non-cycle target (a specific player) is treated as index 0 so Tab lands on
+-- the first fixed target.
+function PANEL:CycleTarget(dir)
+	if self.Language == "javascript" then return end
+	local idx = 0
+	for i, t in ipairs(CYCLE_TARGETS) do
+		if t.target == self.Target then
+			idx = i
+			break
+		end
+	end
+
+	local nextIdx = ((idx - 1 + dir) % #CYCLE_TARGETS) + 1
+	local t = CYCLE_TARGETS[nextIdx]
+	self:SetTarget(t.label, t.target, t.icon)
 end
 
 function PANEL:AddRunOption(label, target, icon, menu)
 	menu = menu or self.RunMenu
 	local option = menu:AddOption(label, function()
-		self.TargetCombobox:SetIcon(icon)
-		self.TargetCombobox:SetText(label)
-		self.Target = target
-		self:RunJS("replinterface.ResetAutocompletion()")
-		if target == "server" then
-			self:RunJS("replinterface.LoadAutocompleteState(\"Server\")")
-		elseif target == "shared" then
-			self:RunJS(Noir.Autocomplete.GetJSWithState("Shared", "replinterface"))
-		else
-			self:RunJS(Noir.Autocomplete.GetJSWithState("Client", "replinterface"))
-		end
+		self:SetTarget(label, target, icon)
 	end)
 
 	-- replinterface.LoadAutocompleteState("client")
@@ -142,6 +252,7 @@ function PANEL:SwitchLanguage(langId)
 			"The Main Console stays in Lua so it can display script output.\nOpen a new console (Ctrl+Shift+`) to use JavaScript.",
 			"Main Console", "Ok"
 		):SetSkin("Noir")
+		self:UpdateLanguageCombo(self.Language)
 		return
 	end
 
@@ -164,6 +275,10 @@ function PANEL:SwitchLanguage(langId)
 			end
 		end
 
+		self:UpdateLanguageCombo(langId)
+		-- Collapse the target selector to "This console" for JS, or restore the
+		-- Lua run target when switching back.
+		self:UpdateTargetCombo()
 		if self.Session then
 			self.Session.language = langId
 			Noir.Editor.Storage.QueueSave()
@@ -173,7 +288,7 @@ function PANEL:SwitchLanguage(langId)
 	if self.HasOutput then
 		Derma_Query(
 			"Switching language clears this console. Continue?", "Switch language?",
-			"Switch", apply, "Cancel", function() end
+			"Switch", apply, "Cancel", function() self:UpdateLanguageCombo(self.Language) end
 		):SetSkin("Noir")
 	else
 		apply()
@@ -263,13 +378,14 @@ function PANEL:JS_OnCode(code)
 	if self.OnCode then self:OnCode(code) end
 end
 
-function PANEL:AddAction(id, label, callback, keyBindings)
+function PANEL:AddAction(id, label, callback, keyBindings, precondition)
 	self.Actions[id] = callback
 	if isstring(keyBindings) then keyBindings = {keyBindings} end
 	self:RunJS([[replinterface.AddAction(%s)]], util.TableToJSON({
 		id = id,
 		label = label,
-		keyBindings = keyBindings
+		keyBindings = keyBindings,
+		precondition = precondition
 	}))
 end
 

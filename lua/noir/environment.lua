@@ -124,7 +124,10 @@ local function traceback()
 end
 
 Environment.Contexts = {}
-Environment.UsedContexts = {}
+-- Only the newest context per runner is ever read (to recover the previous run's
+-- return value for `last`), so we keep a single slot per runner rather than an
+-- ever-growing history array.
+Environment.LastContext = Environment.LastContext or {}
 
 -- Update upvalues on receiving end
 function Environment.UpdateUpvals(context)
@@ -134,9 +137,9 @@ function Environment.UpdateUpvals(context)
 		vars.model = vars.this:GetModel()
 	end
 
-	local contextsTbl = Environment.UsedContexts[context.Runner]
-	if contextsTbl and contextsTbl[#contextsTbl] then
-		local lastRun = contextsTbl[#contextsTbl].RunResults
+	local lastContext = Environment.LastContext[context.Runner]
+	if lastContext then
+		local lastRun = lastContext.RunResults
 		if lastRun and lastRun[1] == true then
 			local lastReturn = lastRun[2]
 			if #lastReturn == 1 then
@@ -203,17 +206,20 @@ function Environment.CreateContext(runner, transferId, vars)
 	ContextTable.EnvTable = setmetatable({}, ContextTable.META)
 	Environment.Contexts[runner] = Environment.Contexts[runner] or {}
 	Environment.Contexts[runner][transferId] = ContextTable
-	Environment.UsedContexts[runner] = Environment.UsedContexts[runner] or {}
+	-- UpdateUpvals reads LastContext[runner] to bind `last`, so populate this
+	-- context's upvalues (against the previous run) *before* overwriting the slot.
 	Environment.UpdateUpvals(ContextTable)
-	table.insert(Environment.UsedContexts[runner], ContextTable)
+	Environment.LastContext[runner] = ContextTable
 	if vars.__NO_CAPTURE then return ContextTable end
 	for _, v in pairs(Environment.MessageFuncs) do
 		local original = _G[v]
 		ContextTable.Upvalues[v] = function(...)
-			Environment.SendMessage(runner, transferId, v, {
-				trace = traceback(),
-				args = {...},
-			})
+			if Noir.Network.Channels[transferId] then
+				Environment.SendMessage(runner, transferId, v, {
+					trace = traceback(),
+					args = {...},
+				})
+			end
 
 			original(...)
 		end
@@ -226,23 +232,39 @@ concommand.Add("noir_clearenvs", function(ply)
 	local cleared = 0
 	for k, v in pairs(Environment.Contexts) do
 		if not IsValid(k) then
-			cleared = cleared + #Environment.Contexts[k]
+			cleared = cleared + table.Count(v)
 			Environment.Contexts[k] = nil
+			Environment.LastContext[k] = nil
 		end
 	end
 
-	Noir.Msg("Cleared ", Color(0, 150, 0), tostring(cleared), Color(255, 255, 255), " envs.")
+	Noir.Msg("Cleared ", Color(0, 150, 0), tostring(cleared), Color(255, 255, 255), " envs.\n")
 end, nil, "Clears unused Noir environments")
 
 concommand.Add("noir_clearenvs_all", function(ply)
 	if SERVER and IsValid(ply) and not ply:IsSuperAdmin() then return end
-	local cleared = #Environment.Contexts
-	for k, v in pairs(Environment.Contexts) do
-		Environment.Contexts[k] = {}
+	local cleared = 0
+	for _, v in pairs(Environment.Contexts) do
+		cleared = cleared + table.Count(v)
 	end
 
-	Noir.Msg("Cleared ", Color(0, 150, 0), tostring(cleared), Color(255, 255, 255), " envs.")
+	Environment.Contexts = {}
+	Environment.LastContext = {}
+
+	Noir.Msg("Cleared ", Color(0, 150, 0), tostring(cleared), Color(255, 255, 255), " envs.\n")
 end, nil, "Clears all Noir environments")
+
+if SERVER then
+	-- Free a leaving player's run contexts. The network layer's PlayerDisconnected
+	-- sweep drops their channels (firing runCode `close`, which clears individual
+	-- Contexts[opener][transferId]) but never touches the per-runner outer table or
+	-- the `last` slot, both keyed by the now-invalid player entity.
+	hook.Add("PlayerDisconnected", "Noir.Environment.Cleanup", function(ply)
+		if not IsValid(ply) then return end
+		Environment.Contexts[ply] = nil
+		Environment.LastContext[ply] = nil
+	end)
+end
 
 -- Unsubscribe from a run's script-output channel so it stops spamming the console.
 -- `all` closes every run channel we opened. Each close is scoped to its own
