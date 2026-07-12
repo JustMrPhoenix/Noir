@@ -108,6 +108,7 @@ function Noir.Load()
 	loadModule("search.lua")
 	loadModule("environment.lua")
 	loadModule("filesearch.lua")
+	loadModule("entitysearch.lua")
 	loadModule("client/autocomplete.lua")
 	loadModule("client/skin.lua")
 	loadModule("client/file_browser.lua")
@@ -142,6 +143,8 @@ function Noir.Load()
 	if CLIENT and Noir.Editor then Noir.Editor.Storage.FirstRunCheck() end
 	-- Trigger autorun scripts after Noir is fully loaded and all native tabs are registered
 	if CLIENT and Noir.Autorun then Noir.Autorun.Initialize() end
+	-- Optionally warm the editor's DHTML page in the background (noir_preload 1).
+	if CLIENT and Noir.Editor and Noir.Editor.PreloadConvar:GetBool() then Noir.Editor.Preload() end
 end
 
 if SERVER then

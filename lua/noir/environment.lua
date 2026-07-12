@@ -165,6 +165,43 @@ function Environment.UpdateVarsSV(data)
 	if IsValid(vars.this) then vars.__constrained = constraint.GetAllConstrainedEntities(vars.this) end
 end
 
+-- Build a sandbox environment table (for debug.setfenv) whose __index resolves a
+-- name in the same order the run context does: rawget -> upvalues -> _G ->
+-- Noir.Search.FindEntity (so a bare `bob` finds player bob, `props` stays a magic
+-- table). Writes go to _G unless `isolate`, which keeps them on the table itself.
+-- Shared by CreateContext and Noir.EntitySearch.RunSnippet so both resolve names
+-- identically.
+local ENV_NILS = {CLIENT = true, SERVER = true}
+function Environment.MakeEnvTable(upvalues, isolate)
+	upvalues = upvalues or {}
+	return setmetatable({}, {
+		__index = function(self, key)
+			local var = rawget(self, key)
+			if var ~= nil then return var end
+			local upval = upvalues[key]
+			if upval ~= nil then return upval end
+			local gvar = _G[key]
+			if gvar ~= nil then return gvar end
+			if not ENV_NILS[key] then
+				var = Noir.Search.FindEntity(key, upvalues)
+				if isentity(var) and var:IsValid() then return var end
+				-- magic search tables / lists aren't entities; return as-is
+				if var ~= nil and not isentity(var) then return var end
+			end
+
+			return nil
+		end,
+		__newindex = function(self, key, value)
+			if isolate then
+				rawset(self, key, value)
+				return
+			end
+
+			_G[key] = value
+		end
+	})
+end
+
 function Environment.CreateContext(runner, transferId, vars)
 	local ContextTable = {}
 	ContextTable.ID = transferId
@@ -172,38 +209,7 @@ function Environment.CreateContext(runner, transferId, vars)
 	ContextTable.RunnerSteamID = runner:SteamID()
 	ContextTable.IsolateGlobal = vars.__ISOLATE_GLOBALS or false
 	ContextTable.Upvalues = vars or {}
-	local nils = {
-		["CLIENT"] = true,
-		["SERVER"] = true,
-	}
-
-	ContextTable.META = {
-		__index = function(self, key)
-			local var = rawget(self, key)
-			if var ~= nil then return var end
-			local upval = ContextTable.Upvalues[key]
-			if upval ~= nil then return upval end
-			local gvar = _G[key]
-			if gvar ~= nil then return gvar end
-			if not nils[key] then
-				var = Noir.Search.FindEntity(key, ContextTable.Upvalues)
-				if isentity(var) and var:IsValid() then return var end
-				-- magic search tables / lists aren't entities; return as-is
-				if var ~= nil and not isentity(var) then return var end
-			end
-			return nil
-		end,
-		__newindex = function(self, key, value)
-			if ContextTable.IsolateGlobal then
-				rawset(self, key, value)
-				return
-			end
-
-			_G[key] = value
-		end
-	}
-
-	ContextTable.EnvTable = setmetatable({}, ContextTable.META)
+	ContextTable.EnvTable = Environment.MakeEnvTable(ContextTable.Upvalues, ContextTable.IsolateGlobal)
 	Environment.Contexts[runner] = Environment.Contexts[runner] or {}
 	Environment.Contexts[runner][transferId] = ContextTable
 	-- UpdateUpvals reads LastContext[runner] to bind `last`, so populate this

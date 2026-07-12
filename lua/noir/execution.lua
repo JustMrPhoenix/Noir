@@ -41,11 +41,11 @@ function Noir.BuildJSEditorRun(code)
 	return Format([[window.__noir.run("%s");]], code:JavascriptSafe())
 end
 
-function Noir.RunCode(code, identifier, environment)
+function Noir.RunCode(code, identifier, environment, quiet)
 	identifier = identifier or "Noir.RunCode"
 	local compileResults = CompileString(code, identifier, false)
 	if not isfunction(compileResults) then
-		Noir.Error("[", identifier, "] Error compiling code: " .. compileResults, "\n")
+		if not quiet then Noir.Error("[", identifier, "] Error compiling code: " .. compileResults, "\n") end
 		return false, compileResults
 	end
 
@@ -54,10 +54,54 @@ function Noir.RunCode(code, identifier, environment)
 	Noir.Debug("RunCode", identifier, call_results)
 	if not table.remove(call_results, 1) then
 		local msg = call_results[1]
-		Noir.Error("[", identifier, "] Error pcalling code: " .. tostring(msg), "\n")
+		if not quiet then Noir.Error("[", identifier, "] Error pcalling code: " .. tostring(msg), "\n") end
 		return false, msg
 	end
 	return true, call_results
+end
+
+function Noir.EvalCode(code, identifier, runner)
+	identifier = identifier or "Noir.EvalCode"
+	-- Prefer expression form so `Entity(5)` returns a value; fall back to a block.
+	if isfunction(CompileString("return " .. code, identifier, false)) then
+		code = "return " .. code
+	end
+
+	runner = runner or (SERVER and Entity(0) or LocalPlayer())
+	local vars = Noir.Environment.MakeVars()
+	Noir.Search.PopulateVars(vars, runner)
+	return Noir.RunCode(code, identifier, Noir.Environment.MakeEnvTable(vars, true), true)
+end
+
+-- Log a code relay/run as "<verb> code(id): identifier [from => to]".
+local function logRun(verb, sender, transferId, data)
+	Noir.Msg(verb .. " code(", Color(0, 120, 205), transferId, Color(255, 255, 255), "): ", -- ):
+		Color(230, 220, 115), data.identifier,
+		Color(255, 255, 255), " [",
+		Color(0, 150, 0), sender == Entity(0) and "(SERVER)" or sender:Nick() .. "(" .. sender:SteamID() .. ")",
+		Color(255, 255, 255), " => ",
+		Color(0, 150, 0), isentity(data.target) and data.target:Nick() .. "(" .. data.target:SteamID() .. ")" or data.target:upper(),
+		Color(255, 255, 255), "]\n")
+end
+
+-- Run `code` in a fresh context for `runner` and reply with the formatted result
+-- on `transferId` (`data` carries the output-format opts). Shared by the local
+-- "self" path and the channel receive handler.
+local function runAndReply(runner, transferId, code, identifier, vars, data)
+	local context = Noir.Environment.CreateContext(runner, transferId, vars)
+	local done, returns = Noir.RunCode(code, identifier, context.EnvTable)
+	context.RunResults = {done, returns}
+	if not done and not isstring(returns) then returns = Noir.Format.FormatLong(returns, 0, data) end
+	Noir.Environment.SendMessage(runner, transferId, "run", {
+		done,
+		returns,
+		opts = data
+	})
+
+	if not done then
+		ErrorNoHalt(Format("[%s] %s", identifier, returns))
+		print()
+	end
 end
 
 function Noir.SendCode(code, identifier, target, transferId)
@@ -175,20 +219,7 @@ function Noir.SendCode(code, identifier, target, transferId)
 
 	if target == "self" then
 		local me = SERVER and Entity(0) or LocalPlayer()
-		local context = Noir.Environment.CreateContext(me, transferId, Noir.Environment.MakeVars())
-		local done, returns = Noir.RunCode(code, identifier, context.EnvTable)
-		context.RunResults = {done, returns}
-		if not done and not isstring(returns) then returns = Noir.Format.FormatLong(returns, 0, data) end
-		Noir.Environment.SendMessage(me, transferId, "run", {
-			done,
-			returns,
-			opts = data
-		})
-
-		if not done then
-			ErrorNoHalt(Format("[%s] %s", identifier, returns))
-			print()
-		end
+		runAndReply(me, transferId, code, identifier, Noir.Environment.MakeVars(), data)
 		return transferId
 	end
 
@@ -200,46 +231,69 @@ function Noir.SendCode(code, identifier, target, transferId)
 	return transferId
 end
 
+----------------------------------------------------------------------
+-- Public run API. Run an arbitrary code string on a target and stream results
+-- back through `onResult`. This wraps the OpenChannel + RegisterHandler + SendCode
+-- boilerplate so callers don't have to touch the network layer directly.
+--
+-- `target` is one of "self", "server", "shared", "clients", or a specific Player.
+-- Returns the run channel id (nil on failure). The channel stays open -- a run's
+-- hooks/timers may keep replying long after the first result -- so tear it down
+-- with Noir.Network.CloseChannel(id) once you're done listening.
+--
+-- onResult(result) is called for each reply, where result = {
+--   sender    = the Player (or Entity(0) = the server) that produced this reply,
+--   done      = false if the code errored, true otherwise,
+--   returns   = the formatted result / error string,
+--   channelId = the run channel id,
+-- }
+--
+-- Running is superadmin-gated server-side (Network.CheckAccess), the same whether
+-- called from a client or the server. For a synchronous LOCAL eval that returns
+-- real Lua values (not formatted strings) use Noir.EvalCode instead.
+----------------------------------------------------------------------
+function Noir.Run(code, target, onResult, identifier)
+	identifier = identifier or "Noir.Run"
+	local id = Noir.Network.OpenChannel("runCode", target)
+	if not id then return end
+	if onResult then
+		Noir.Environment.RegisterHandler(function(sender, channelId, _, data)
+			local decoded = util.JSONToTable(data) or {}
+			onResult({
+				sender = sender,
+				done = decoded[1],
+				returns = decoded[2],
+				channelId = channelId
+			})
+		end, id, "run")
+	end
+
+	Noir.SendCode(code, identifier, target, id)
+	return id
+end
+
+-- Named target wrappers over Noir.Run.
+function Noir.RunOnSelf(code, onResult, identifier) return Noir.Run(code, "self", onResult, identifier) end
+function Noir.RunOnServer(code, onResult, identifier) return Noir.Run(code, "server", onResult, identifier) end
+function Noir.RunShared(code, onResult, identifier) return Noir.Run(code, "shared", onResult, identifier) end
+function Noir.RunOnClients(code, onResult, identifier) return Noir.Run(code, "clients", onResult, identifier) end
+-- `ply` is the specific client (a Player) to run on.
+function Noir.RunOnClient(code, ply, onResult, identifier) return Noir.Run(code, ply, onResult, identifier) end
+
 Noir.Network.ChannelHandlers["runCode"] = {
 	-- Server-side hook when a runCode open is received/relayed: inject server-only
 	-- vars into the (about-to-be-forwarded) data and log the relay.
 	serverOpen = function(sender, transferId, data)
 		Noir.Environment.UpdateVarsSV(data)
 		if data.target == "server" then return end
-		Noir.Msg("Sending code(", Color(0, 120, 205), transferId, Color(255, 255, 255), "): ", -- ):
-			Color(230, 220, 115), data.identifier,
-			Color(255, 255, 255), " [",
-			Color(0, 150, 0), sender == Entity(0) and "(SERVER)" or sender:Nick() .. "(" .. sender:SteamID() .. ")",
-			Color(255, 255, 255), " => ",
-			Color(0, 150, 0), isentity(data.target) and data.target:Nick() .. "(" .. data.target:SteamID() .. ")" or data.target:upper(),
-			Color(255, 255, 255), "]\n")
+		logRun("Sending", sender, transferId, data)
 	end,
 	-- Any endpoint (target client, or the server for shared/server runs) runs the
 	-- code and replies on the SAME channel. `sender` is the run's initiator (opener),
 	-- so output flows back to whoever started the run.
 	open = function(sender, transferId, data)
-		Noir.Msg("Running code(", Color(0, 120, 205), transferId, Color(255, 255, 255), "): ", -- ):
-			Color(230, 220, 115), data.identifier,
-			Color(255, 255, 255), " [",
-			Color(0, 150, 0), sender == Entity(0) and "(SERVER)" or sender:Nick() .. "(" .. sender:SteamID() .. ")",
-			Color(255, 255, 255), " => ",
-			Color(0, 150, 0), isentity(data.target) and data.target:Nick() .. "(" .. data.target:SteamID() .. ")" or data.target:upper(),
-			Color(255, 255, 255), "]\n")
-
-		local context = Noir.Environment.CreateContext(sender, transferId, data.vars)
-		local done, returns = Noir.RunCode(data.string, data.identifier, context.EnvTable)
-		context.RunResults = {done, returns}
-		if not done and not isstring(returns) then returns = Noir.Format.FormatLong(returns, 0, data) end
-		Noir.Environment.SendMessage(sender, transferId, "run", {
-			done,
-			returns,
-			opts = data
-		})
-
-		if not done then
-			ErrorNoHalt(Format("[%s] %s", data.identifier, returns))
-			print()
-		end
+		logRun("Running", sender, transferId, data)
+		runAndReply(sender, transferId, data.string, data.identifier, data.vars, data)
 	end,
 	-- Teardown: free the run context this endpoint created (keyed by initiator).
 	close = function(transferId, ch)

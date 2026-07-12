@@ -53,7 +53,7 @@ function Editor.RegisterActions(panel)
 	panel:AddAction("toggleConsole", "Noir: Toggle Console Tab", function() Editor.Console.Toggle() end, "Mod.CtrlCmd | Mod.Shift | Key.KeyC")
 	panel:AddAction("toggleSidebar", "View: Toggle Sidebar", function() Editor.Sidebar.Toggle() end, "Mod.CtrlCmd | Key.KeyB")
 	panel:AddAction("runAutorun", "Noir: Run Autorun Scripts", function() if Noir.Autorun then Noir.Autorun.RunAll() end end)
-	panel:AddAction("openEntitySelector", "Noir: Open Entity Selector", function() Noir.EntitySelector.Open() end, "Mod.CtrlCmd | Mod.Shift | Key.KeyE")
+	panel:AddAction("openEntitySelector", "Noir: Show Entity Search", function() Editor.Sidebar.ActivateView("entitysearch") end, "Mod.CtrlCmd | Mod.Shift | Key.KeyE")
 	panel:AddAction("openDashboard", "Noir: Open Dashboard", function() Noir.Dashboard.Show() end, "Mod.CtrlCmd | Mod.Shift | Key.KeyD")
 	panel:AddAction("openFindInFiles", "Noir: Find in Files", function() Noir.FileSearch.UI.Show() end, "Mod.CtrlCmd | Mod.Shift | Key.KeyF")
 end
@@ -68,6 +68,23 @@ function Editor.Show()
 
 	Editor.UI.CreateFrame()
 end
+
+-- Persistent, off-by-default. When enabled, the editor frame is built hidden on load
+-- (see Editor.Preload) so the Monaco DHTML page is warm before the first open.
+Editor.PreloadConvar = CreateConVar("noir_preload", "0", FCVAR_ARCHIVE, "Silently preload the Noir editor in the background on load to warm the Monaco page", 0, 1)
+
+-- Build the editor frame but keep it hidden, purely to preload the DHTML page. No-op
+-- if a frame already exists (whether preloaded or shown).
+function Editor.Preload()
+	if IsValid(Editor.Frame) then return end
+	Editor.UI.CreateFrame(true)
+end
+
+-- Preload immediately when the convar is flipped on at runtime, so users don't have to
+-- reload to get a warm editor.
+cvars.AddChangeCallback("noir_preload", function(_, _, new)
+	if tobool(new) then Editor.Preload() end
+end, "noirPreloadToggle")
 
 -- Register the Editor's settings in the Dashboard. Called from Noir.Load() after the
 -- dashboard module is available (editor.lua itself loads before dashboard.lua).

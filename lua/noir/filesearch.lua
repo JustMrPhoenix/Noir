@@ -28,7 +28,6 @@ FileSearch.DEFAULTS = {
 
 FileSearch.Jobs = FileSearch.Jobs or {} -- array of live jobs (this realm)
 FileSearch.JobCounter = FileSearch.JobCounter or 0
-FileSearch.PendingRemote = FileSearch.PendingRemote or {} -- client: requestId -> ctx
 FileSearch.ServerJobs = FileSearch.ServerJobs or {} -- server: requestId -> job
 
 local HOOK_ID = "NoirFileSearchDriver"
@@ -322,20 +321,9 @@ Noir.Network.ChannelHandlers["fileSearch"] = {
 
 -- Send a search request to the server. `ctx.OnRemoteResults(decoded)` is called
 -- with {results, completed, scanned, matched} when the server replies. Returns
--- the request (channel) id (pass it to FileSearch.SendCancel to abort).
+-- the request (channel) id (pass it to FileSearch.SendCancel to abort;
+-- Noir.Network.IsRequestPending(id) reports whether it's still in flight).
 function FileSearch.SendRemote(opts, ctx)
-	local requestId = Noir.Network.OpenChannel("fileSearch", "server")
-	FileSearch.PendingRemote[requestId] = ctx
-	Noir.Network.OnChannel(requestId, "result", function(sender, channelId, message, data)
-		if not FileSearch.PendingRemote[channelId] then return end
-		FileSearch.PendingRemote[channelId] = nil
-		local decoded = util.JSONToTable(data.string) or {}
-		if ctx.OnRemoteResults then ctx.OnRemoteResults(decoded) end
-		-- Bounded op done: close the channel (drops both records; the job already
-		-- finished so nothing is aborted).
-		Noir.Network.CloseChannel(channelId)
-	end)
-
 	local payload = util.TableToJSON({
 		query = opts.query,
 		caseInsensitive = opts.caseInsensitive,
@@ -349,14 +337,13 @@ function FileSearch.SendRemote(opts, ctx)
 		maxPreviewLen = opts.maxPreviewLen
 	})
 
-	Noir.Network.OpenSend(requestId, payload)
-	return requestId
+	return Noir.Network.Request("fileSearch", "server", payload, function(reply)
+		if ctx.OnRemoteResults then ctx.OnRemoteResults(util.JSONToTable(reply) or {}) end
+	end)
 end
 
 -- Stop waiting on a server search and tell the server to abort it. Closing the
 -- channel relays to the server, whose close handler cancels the running job.
 function FileSearch.SendCancel(requestId)
-	if not requestId then return end
-	FileSearch.PendingRemote[requestId] = nil
-	Noir.Network.CloseChannel(requestId)
+	Noir.Network.CancelRequest(requestId)
 end

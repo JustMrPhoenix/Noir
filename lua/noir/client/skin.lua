@@ -358,6 +358,19 @@ function SKIN:PaintProgress(panel, w, h)
 end
 
 function SKIN:PaintNumSlider(panel, w, h)
+	local y = math.floor(h / 2)
+	local x1, x2 = 4, w - 4
+	-- Track line the knob rides on.
+	surface.SetDrawColor(60, 60, 60)
+	surface.DrawRect(x1, y - 1, x2 - x1, 2)
+	-- Filled portion up to the knob position.
+	local frac = math.Clamp(panel.GetSlideX and panel:GetSlideX() or 0, 0, 1)
+	surface.SetDrawColor(14, 112, 192)
+	surface.DrawRect(x1, y - 1, (x2 - x1) * frac, 2)
+	-- End boundary ticks.
+	surface.SetDrawColor(110, 110, 110)
+	surface.DrawRect(x1, y - 4, 2, 8)
+	surface.DrawRect(x2 - 2, y - 4, 2, 8)
 end
 
 function SKIN:PaintSliderKnob(panel, w, h)

@@ -1,4 +1,4 @@
-﻿local Highlight = include("entity_highlight.lua")
+local Highlight = include("entity_highlight.lua")
 local EntitySelector = Noir.EntitySelector or {}
 Noir.EntitySelector = EntitySelector
 -- Constants
@@ -31,7 +31,7 @@ local function createFilterRow(parent, label, placeholder)
 	lbl:SetText(label)
 	lbl:SetTextColor(COLORS.text)
 	lbl:Dock(LEFT)
-	lbl:SetWide(60)
+	lbl:SetWide(46)
 	local entry = vgui.Create("DTextEntry", row)
 	entry:SetSkin("Noir")
 	entry:Dock(FILL)
@@ -48,58 +48,27 @@ local function createButton(parent, text, primary)
 	return btn
 end
 
-local function matchesPattern(text, pattern)
-	if pattern == "" then return true end
-	local luaPattern = string.gsub(pattern, "%*", ".*")
-	return string.match(string.lower(text), string.lower(luaPattern)) ~= nil
-end
+local REALM_CHOICES = {
+	{label = "Local", value = "local"},
+	{label = "Server", value = "server"},
+	{label = "Both", value = "both"}
+}
 
 local function truncateModel(model, maxLen)
 	if not model or #model <= maxLen then return model or "" end
 	return "..." .. string.sub(model, -(maxLen - 3))
 end
 
---------------------------------------------------------------------------------
--- List Population
---------------------------------------------------------------------------------
-local function populateList(listView, entities, filter)
-	listView:Clear()
-	local plyPos = LocalPlayer():GetPos()
-	for _, ent in ipairs(entities) do
-		if not IsValid(ent) then continue end
-		if filter and not filter(ent) then continue end
-		local dist = math.floor(ent:GetPos():Distance(plyPos))
-		local model = truncateModel(ent:GetModel(), 40)
-		local line = listView:AddLine(ent:EntIndex(), ent:GetClass(), model, dist)
-		line.Entity = ent
+local function makeCombo(parent, choices, current)
+	local combo = vgui.Create("DComboBox", parent)
+	combo:SetSkin("Noir")
+	combo.NoirValue = current
+	for _, c in ipairs(choices) do
+		combo:AddChoice(c.label, c.value, c.value == current)
 	end
 
-	listView:SortByColumn(4)
-end
-
-local function searchEntities(classFilter, modelFilter)
-	local results = {}
-	local ply = LocalPlayer()
-	for _, ent in ipairs(ents.GetAll()) do
-		if not IsValid(ent) or ent == ply or ent:IsWorld() then continue end
-		local class = ent:GetClass()
-		local model = ent:GetModel() or ""
-		if not matchesPattern(class, classFilter) then continue end
-		if not matchesPattern(model, modelFilter) then continue end
-		table.insert(results, ent)
-	end
-	return results
-end
-
-local function getNearbyEntities(radius)
-	local results = {}
-	local ply = LocalPlayer()
-	local plyPos = ply:GetPos()
-	for _, ent in ipairs(ents.FindInSphere(plyPos, radius)) do
-		if not IsValid(ent) or ent == ply or ent:IsWorld() then continue end
-		table.insert(results, ent)
-	end
-	return results
+	combo.OnSelect = function(_, _, _, data) combo.NoirValue = data end
+	return combo
 end
 
 --------------------------------------------------------------------------------
@@ -210,16 +179,318 @@ function EntitySelector.IsPickMode()
 end
 
 --------------------------------------------------------------------------------
--- Main UI
+-- Search content panel. Reused in three hosts: embedded in the editor sidebar
+-- (browse mode), popped out into a standalone window (browse mode), and as a modal
+-- entity picker (picker mode -- when a caller passes options.onSelect, the
+-- Select/Cancel buttons appear and choosing a row fires onSelect + closes the host).
+-- The layout docks top-down so it reflows to a narrow sidebar or a wide window.
+--------------------------------------------------------------------------------
+local PANEL = {}
+
+function PANEL:Init()
+	self:SetPaintBackground(false)
+	self.Options = {}
+
+	-- Filters
+	local filters = vgui.Create("DPanel", self)
+	filters:Dock(TOP)
+	filters:SetTall(99)
+	filters:SetPaintBackground(false)
+	self.ClassEntry = createFilterRow(filters, "Class:", "e.g. prop_physics, npc_*")
+	self.ModelEntry = createFilterRow(filters, "Model:", "e.g. *barrel*, models/props/*")
+	self.LuaEntry = createFilterRow(filters, "Lua:", "expr -> entity, e.g. E(\"bob\") or props()")
+
+	-- Realm + radius
+	local optRow = vgui.Create("DPanel", self)
+	optRow:Dock(TOP)
+	optRow:SetTall(24)
+	optRow:DockMargin(5, 5, 5, 0)
+	optRow:SetPaintBackground(false)
+	self.RealmCombo = makeCombo(optRow, REALM_CHOICES, "local")
+	self.RealmCombo:Dock(LEFT)
+	self.RealmCombo:SetWide(70)
+	self.RealmCombo:SetTooltip("Which realm to search: your client, the server (superadmin), or both")
+	self.RadiusSlider = vgui.Create("DNumSlider", optRow)
+	self.RadiusSlider:SetSkin("Noir")
+	self.RadiusSlider:Dock(FILL)
+	self.RadiusSlider:DockMargin(8, 0, 0, 0)
+	self.RadiusSlider:SetMin(100)
+	self.RadiusSlider:SetMax(5000)
+	self.RadiusSlider:SetDecimals(0)
+	self.RadiusSlider:SetValue(1000)
+	self.RadiusSlider:SetText("Radius")
+	self.RadiusSlider.Label:SetTextColor(COLORS.text)
+
+	-- Action buttons. Manually laid out (not docked) so they distribute evenly across
+	-- whatever width the host gives us -- fits a narrow sidebar and a wide window alike.
+	local btnRow = vgui.Create("DPanel", self)
+	btnRow:Dock(TOP)
+	btnRow:SetTall(26)
+	btnRow:DockMargin(5, 5, 5, 0)
+	btnRow:SetPaintBackground(false)
+	local searchBtn = createButton(btnRow, "Search", true)
+	local nearbyBtn = createButton(btnRow, "Nearby", false)
+	local evalBtn = createButton(btnRow, "Eval", false)
+	local pickBtn = createButton(btnRow, "Pick", false)
+	pickBtn:SetTooltip("Pick an entity from your 3D view")
+	local rowButtons = {searchBtn, nearbyBtn, evalBtn, pickBtn}
+	btnRow.PerformLayout = function(_, w, h)
+		local gap, n = 4, #rowButtons
+		local bw = (w - gap * (n - 1)) / n
+		for i, b in ipairs(rowButtons) do
+			b:SetPos((i - 1) * (bw + gap), 0)
+			b:SetSize(bw, h)
+		end
+	end
+
+	-- Bottom row: status label (always) + Select/Cancel (picker mode only).
+	local bottom = vgui.Create("DPanel", self)
+	bottom:Dock(BOTTOM)
+	bottom:SetTall(28)
+	bottom:DockMargin(5, 5, 5, 5)
+	bottom:SetPaintBackground(false)
+	self.SelectBtn = createButton(bottom, "Select", true)
+	self.SelectBtn:Dock(RIGHT)
+	self.SelectBtn:SetWide(90)
+	self.SelectBtn:SetVisible(false)
+	self.CancelBtn = createButton(bottom, "Cancel", false)
+	self.CancelBtn:Dock(RIGHT)
+	self.CancelBtn:DockMargin(0, 0, 5, 0)
+	self.CancelBtn:SetWide(70)
+	self.CancelBtn:SetVisible(false)
+	self.StatusLabel = vgui.Create("DLabel", bottom)
+	self.StatusLabel:Dock(FILL)
+	self.StatusLabel:SetTextColor(COLORS.text)
+	self.StatusLabel:SetText("")
+
+	-- Results
+	self.ListView = vgui.Create("DListView", self)
+	self.ListView:SetSkin("Noir")
+	self.ListView:Dock(FILL)
+	self.ListView:DockMargin(5, 5, 5, 0)
+	self.ListView:SetMultiSelect(false)
+	self.ListView:AddColumn("Realm"):SetFixedWidth(50)
+	self.ListView:AddColumn("ID"):SetFixedWidth(44)
+	self.ListView:AddColumn("Class")
+	self.ListView:AddColumn("Model")
+	self.ListView:AddColumn("Dist"):SetFixedWidth(52)
+
+	-- Wiring
+	searchBtn.DoClick = function()
+		self:RunQuery("filter", {classFilter = self.ClassEntry:GetText():Trim(), modelFilter = self.ModelEntry:GetText():Trim()})
+	end
+
+	nearbyBtn.DoClick = function() self:RunQuery("nearby", {radius = self.RadiusSlider:GetValue()}) end
+	evalBtn.DoClick = function() self:RunQuery("lua", {code = self.LuaEntry:GetText()}) end
+	pickBtn.DoClick = function() self:StartPick() end
+	self.LuaEntry.OnEnter = evalBtn.DoClick
+	self.ClassEntry.OnEnter = searchBtn.DoClick
+	self.ModelEntry.OnEnter = searchBtn.DoClick
+	self.ListView.OnRowSelected = function(_, _, row) if IsValid(row.Entity) then Highlight.Set(row.Entity) end end
+	self.ListView.DoDoubleClick = function(_, _, row) self:SelectEntity(row.Entity, row) end
+	self.ListView.OnCursorExited = function() Highlight.Stop() end
+	self.SelectBtn.DoClick = function()
+		local _, row = self.ListView:GetSelectedLine()
+		if row then self:SelectEntity(row.Entity, row) end
+	end
+
+	self.CancelBtn.DoClick = function() if IsValid(self.HostFrame) then self.HostFrame:Remove() end end
+end
+
+-- Apply host options and run the initial (nearby) query. options: filter, onSelect,
+-- onCancel. Passing onSelect switches the panel into modal-picker mode.
+function PANEL:SetSearchOptions(options)
+	self.Options = options or {}
+	local picker = self.Options.onSelect ~= nil
+	self.SelectBtn:SetVisible(picker)
+	self.CancelBtn:SetVisible(picker)
+	self:RunQuery("nearby", {radius = self.RadiusSlider:GetValue()})
+end
+
+-- Re-run the last query (sidebar Refresh action).
+function PANEL:Refresh()
+	local last = self.LastQuery
+	if last then
+		self:RunQuery(last.mode, last.params)
+	else
+		self:RunQuery("nearby", {radius = self.RadiusSlider:GetValue()})
+	end
+end
+
+-- Add descriptor rows for one realm. Entity handles are resolved from the shared
+-- EntIndex (networked entities exist on both realms); distance is computed against
+-- the local player so both realms' columns are comparable. Rows for entities not
+-- present locally still show, but carry a NULL handle.
+function PANEL:AddResults(descriptors, realm)
+	local plyPos = LocalPlayer():GetPos()
+	local filter = self.Options.filter
+	for _, d in ipairs(descriptors) do
+		local ent = Entity(d.index)
+		-- The filter runs on a live handle; skip rows we can't verify against it.
+		if not filter or (IsValid(ent) and filter(ent)) then
+			local pos = IsValid(ent) and ent:GetPos() or Vector(d.x or 0, d.y or 0, d.z or 0)
+			local line = self.ListView:AddLine(
+				realm == "server" and "Server" or "Local",
+				d.index, d.class, truncateModel(d.model, 40), math.floor(pos:Distance(plyPos))
+			)
+
+			line.Entity = ent
+			line.Descriptor = d
+			line.Realm = realm
+		end
+	end
+
+	self.ListView:SortByColumn(5)
+end
+
+-- Run a query (mode "filter" / "nearby" / "lua") across the selected realm(s).
+-- Clear the in-world highlight and drop the list selection (de-select).
+function PANEL:ClearHighlight()
+	Highlight.Stop()
+	if IsValid(self.ListView) then self.ListView:ClearSelection() end
+end
+
+function PANEL:RunQuery(mode, params)
+	self.LastQuery = {mode = mode, params = params}
+	-- A fresh search de-selects: the previously highlighted row is about to vanish.
+	Highlight.Stop()
+	self.ListView:Clear()
+	-- Drop any in-flight server request so its late reply can't append to a list
+	-- we've just cleared (e.g. after switching to Local-only or re-searching).
+	if self.PendingRemote then
+		Noir.EntitySearch.SendCancel(self.PendingRemote)
+		self.PendingRemote = nil
+	end
+
+	local target = self.RealmCombo.NoirValue or "local"
+	local wantServer = target == "server" or target == "both"
+	if target == "local" or target == "both" then
+		local descriptors, err = Noir.EntitySearch.Gather({
+			mode = mode,
+			classFilter = params.classFilter,
+			modelFilter = params.modelFilter,
+			radius = params.radius,
+			code = params.code,
+			origin = LocalPlayer():GetPos(),
+			runner = LocalPlayer()
+		}, LocalPlayer())
+
+		if err then
+			self.StatusLabel:SetText("Local: " .. err)
+			Noir.Error("Entity Search (local): ", err, "\n")
+		else
+			self:AddResults(descriptors, "local")
+			if not wantServer then self.StatusLabel:SetText(Format("%d entities", #descriptors)) end
+		end
+	end
+
+	if not wantServer then return end
+
+	-- Server search: fire a request, merge results in when the reply lands. The
+	-- server silently drops unauthorized requests, so time out the spinner.
+	self.StatusLabel:SetText("Searching server...")
+	local reqId
+	reqId = Noir.EntitySearch.SendRemote({
+		mode = mode,
+		classFilter = params.classFilter,
+		modelFilter = params.modelFilter,
+		radius = params.radius,
+		code = params.code
+	}, {
+		OnRemoteResults = function(decoded)
+			if not IsValid(self) then return end
+			self.PendingRemote = nil
+			if decoded.error then
+				self.StatusLabel:SetText("Server: " .. decoded.error)
+				Noir.Error("Entity Search (server): ", decoded.error, "\n")
+				return
+			end
+
+			local results = decoded.results or {}
+			self:AddResults(results, "server")
+			self.StatusLabel:SetText(Format("Server: %d entities", #results))
+		end
+	})
+
+	self.PendingRemote = reqId
+	timer.Simple(5, function()
+		if not IsValid(self) then return end
+		if self.PendingRemote ~= reqId or not Noir.Network.IsRequestPending(reqId) then return end
+		Noir.EntitySearch.SendCancel(reqId)
+		self.PendingRemote = nil
+		self.StatusLabel:SetText("Server search denied or timed out (needs superadmin)")
+		Noir.Msg("Server entity search denied or timed out (needs superadmin)\n")
+	end)
+end
+
+function PANEL:StartPick()
+	-- StartPickMode hides every top-level panel (incl. the editor frame) for the pick
+	-- and restores them on stop, so we don't manage host visibility ourselves.
+	EntitySelector.StartPickMode({
+		owner = self,
+		filter = self.Options.filter,
+		onSelect = function(ent) self:SelectEntity(ent) end
+	})
+end
+
+-- Act on a chosen entity. In picker mode this fires onSelect and closes the host
+-- (which needs a live client handle). In browse mode it highlights the entity (when
+-- present locally) and echoes it into the Main Console's REPL output. `row` carries
+-- the descriptor/realm so a server-only entity (no client handle) can still be
+-- evaluated on the server.
+function PANEL:SelectEntity(ent, row)
+	local opts = self.Options
+	if opts.onSelect then
+		if not IsValid(ent) then
+			Noir.Msg("That entity isn't available on this client (server-only)\n")
+			return
+		end
+
+		if opts.filter and not opts.filter(ent) then return end
+		Highlight.Stop()
+		self.Selecting = true
+		opts.onSelect(ent)
+		if IsValid(self.HostFrame) then self.HostFrame:Remove() end
+		return
+	end
+
+	if IsValid(ent) then Highlight.Set(ent) end
+	self:SendToConsole(ent, row)
+end
+
+-- Echo the selected entity into the Main Console by evaluating Entity(index) on its
+-- realm (server rows run on the server, everything else on the client).
+function PANEL:SendToConsole(ent, row)
+	local index = (row and row.Descriptor and row.Descriptor.index) or (IsValid(ent) and ent:EntIndex())
+	if not index then return end
+	if not (Noir.Editor and Noir.Editor.Console and Noir.Editor.Console.Evaluate) then return end
+	local target = (row and row.Realm == "server") and "server" or "self"
+	Noir.Editor.Console.Evaluate(Format("Entity(%d)", index), target, "Entity")
+end
+
+function PANEL:OnRemove()
+	Highlight.Stop()
+	if self.PendingRemote then
+		Noir.EntitySearch.SendCancel(self.PendingRemote)
+		self.PendingRemote = nil
+	end
+
+	if EntitySelector.PickOwner == self then EntitySelector.StopPickMode() end
+end
+
+vgui.Register("NoirEntitySearch", PANEL, "DPanel")
+
+--------------------------------------------------------------------------------
+-- Standalone window. Hosts the search panel in a DFrame -- used as the modal entity
+-- picker (dashboard: pass options.onSelect/filter) and as the sidebar's pop-out.
 --------------------------------------------------------------------------------
 function EntitySelector.Open(options)
 	options = options or {}
 	if IsValid(EntitySelector.Frame) then EntitySelector.Frame:Remove() end
-	-- Main frame
 	local frame = vgui.Create("DFrame")
 	frame:SetSkin("Noir")
-	frame:SetTitle(options.title or "Entity Selector")
-	frame:SetSize(500, 450)
+	frame:SetTitle(options.title or "Entity Search")
+	frame:SetSize(640, 460)
 	frame:Center()
 	frame:SetDraggable(true)
 	frame:SetSizable(true)
@@ -227,122 +498,20 @@ function EntitySelector.Open(options)
 	frame:MakePopup()
 	frame.btnMinim:SetVisible(false)
 	frame.btnMaxim:SetVisible(false)
+
+	local content = vgui.Create("NoirEntitySearch", frame)
+	content:Dock(FILL)
+	content:DockMargin(4, 26, 4, 4)
+	content.HostFrame = frame
+	content:SetSearchOptions(options)
+	frame.Content = content
+
 	frame.OnRemove = function()
-		Highlight.Stop()
 		EntitySelector.Frame = nil
-		if options.onCancel and not frame.Selected then options.onCancel() end
+		if options.onCancel and not content.Selecting then options.onCancel() end
 	end
 
 	EntitySelector.Frame = frame
-	-- Search filters
-	local searchPanel = vgui.Create("DPanel", frame)
-	searchPanel:Dock(TOP)
-	searchPanel:SetTall(70)
-	searchPanel:SetPaintBackground(false)
-	local classEntry = createFilterRow(searchPanel, "Class:", "e.g. prop_physics, npc_*")
-	local modelEntry = createFilterRow(searchPanel, "Model:", "e.g. *barrel*, models/props/*")
-	-- Action buttons
-	local btnRow = vgui.Create("DPanel", frame)
-	btnRow:Dock(TOP)
-	btnRow:SetTall(30)
-	btnRow:DockMargin(5, 5, 5, 5)
-	btnRow:SetPaintBackground(false)
-	local searchBtn = createButton(btnRow, "Search", true)
-	searchBtn:Dock(LEFT)
-	searchBtn:SetWide(80)
-	local viewBtn = createButton(btnRow, "Pick from View", false)
-	viewBtn:Dock(LEFT)
-	viewBtn:DockMargin(5, 0, 0, 0)
-	viewBtn:SetWide(100)
-	local nearbyBtn = createButton(btnRow, "Nearby", false)
-	nearbyBtn:Dock(LEFT)
-	nearbyBtn:DockMargin(5, 0, 0, 0)
-	nearbyBtn:SetWide(70)
-	local radiusSlider = vgui.Create("DNumSlider", btnRow)
-	radiusSlider:SetSkin("Noir")
-	radiusSlider:Dock(FILL)
-	radiusSlider:DockMargin(10, 0, 0, 0)
-	radiusSlider:SetMin(100)
-	radiusSlider:SetMax(5000)
-	radiusSlider:SetDecimals(0)
-	radiusSlider:SetValue(1000)
-	radiusSlider:SetText("Radius")
-	radiusSlider.Label:SetTextColor(COLORS.text)
-	-- Results list
-	local listView = vgui.Create("DListView", frame)
-	listView:SetSkin("Noir")
-	listView:Dock(FILL)
-	listView:DockMargin(5, 0, 5, 5)
-	listView:SetMultiSelect(false)
-	listView:AddColumn("ID"):SetFixedWidth(50)
-	listView:AddColumn("Class"):SetFixedWidth(150)
-	listView:AddColumn("Model")
-	listView:AddColumn("Distance"):SetFixedWidth(70)
-	-- Bottom buttons
-	local selectPanel = vgui.Create("DPanel", frame)
-	selectPanel:Dock(BOTTOM)
-	selectPanel:SetTall(35)
-	selectPanel:DockMargin(5, 5, 5, 5)
-	selectPanel:SetPaintBackground(false)
-	local selectBtn = createButton(selectPanel, "Select", true)
-	selectBtn:Dock(RIGHT)
-	selectBtn:SetWide(100)
-	local cancelBtn = createButton(selectPanel, "Cancel", false)
-	cancelBtn:Dock(RIGHT)
-	cancelBtn:DockMargin(0, 0, 5, 0)
-	cancelBtn:SetWide(80)
-	-- Selection callback
-	local function selectEntity(ent)
-		if not IsValid(ent) then return end
-		if options.filter and not options.filter(ent) then return end
-		frame.Selected = true
-		Highlight.Stop()
-		frame:Remove()
-		if options.onSelect then options.onSelect(ent) end
-	end
-
-	-- Button actions
-	searchBtn.DoClick = function()
-		local results = searchEntities(classEntry:GetText():Trim(), modelEntry:GetText():Trim())
-		populateList(listView, results, options.filter)
-	end
-
-	nearbyBtn.DoClick = function()
-		local results = getNearbyEntities(radiusSlider:GetValue())
-		populateList(listView, results, options.filter)
-	end
-
-	viewBtn.DoClick = function()
-		EntitySelector.StartPickMode({
-			owner = frame,
-			filter = options.filter,
-			onSelect = function(ent) selectEntity(ent) end,
-			onCancel = function()
-				frame:SetVisible(true)
-				frame:MakePopup()
-			end
-		})
-
-		frame:SetVisible(false)
-	end
-
-	classEntry.OnEnter = searchBtn.DoClick
-	modelEntry.OnEnter = searchBtn.DoClick
-	listView.OnRowSelected = function(_, idx, row) if IsValid(row.Entity) then Highlight.Set(row.Entity) end end
-	listView.DoDoubleClick = function(_, idx, row) selectEntity(row.Entity) end
-	listView.OnCursorExited = function() Highlight.Stop() end
-	selectBtn.DoClick = function()
-		local _, row = listView:GetSelectedLine()
-		if row then selectEntity(row.Entity) end
-	end
-
-	cancelBtn.DoClick = function()
-		Highlight.Stop()
-		frame:Remove()
-	end
-
-	-- Initial population
-	nearbyBtn.DoClick()
 	return frame
 end
 
@@ -361,5 +530,36 @@ EntitySelector.IsHighlighted = Highlight.IsHighlighted
 EntitySelector.StopHighlight = Highlight.Stop
 EntitySelector.ClearHighlight = Highlight.Clear
 EntitySelector.GetHighlightedEntities = Highlight.GetEntities
-concommand.Add("noir_entityselector", function() EntitySelector.Open() end, nil, "Open the Noir Entity Selector")
+
+--------------------------------------------------------------------------------
+-- Sidebar view. Registered like the Explorer; `popout` makes the activity-bar
+-- right-click menu offer "Open in Window".
+--------------------------------------------------------------------------------
+if Noir.Editor and Noir.Editor.Sidebar then
+	Noir.Editor.Sidebar.RegisterView("entitysearch", {
+		title = "Entities",
+		icon = "icon16/brick.png",
+		tooltip = "Entity Search",
+		popout = function() EntitySelector.Open() end,
+		-- De-select (drop the in-world highlight) when the view is hidden -- switched
+		-- away from or the sidebar collapsed. Window close is handled by PANEL:OnRemove.
+		onHide = function(panel) if IsValid(panel) then panel:ClearHighlight() end end,
+		actions = {
+			{
+				icon = "icon16/arrow_refresh.png",
+				tooltip = "Refresh",
+				onClick = function()
+					local def = Noir.Editor.Sidebar.Views["entitysearch"]
+					if def and IsValid(def.panel) then def.panel:Refresh() end
+				end
+			}
+		},
+		build = function(container)
+			local panel = vgui.Create("NoirEntitySearch", container)
+			panel:SetSearchOptions({})
+			return panel
+		end
+	})
+end
+
 return EntitySelector

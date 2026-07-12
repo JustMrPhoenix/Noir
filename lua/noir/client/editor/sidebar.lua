@@ -12,6 +12,11 @@ Editor.Sidebar = Editor.Sidebar or {}
 --   build    function(container) -> Panel  - called once, the first time it is shown
 --   actions  table   - optional header buttons, each {icon, tooltip, onClick}
 --   onShow   function(panel)  - optional, called whenever the view is revealed
+--   onHide   function(panel)  - optional, called when the view is hidden (switched
+--                              away from, or the sidebar collapsed)
+--   popout   function  - optional; if set, right-clicking the activity-bar icon
+--                        offers "Open in Window" which calls it (a standalone copy
+--                        of the view, independent of the embedded sidebar instance)
 Editor.Sidebar.Views = Editor.Sidebar.Views or {}
 Editor.Sidebar.ViewOrder = Editor.Sidebar.ViewOrder or {}
 function Editor.Sidebar.RegisterView(id, def)
@@ -65,6 +70,15 @@ function Editor.Sidebar.RebuildActivityBar()
 		end
 
 		btn.DoClick = function() Editor.Sidebar.ActivateView(id) end
+		btn.DoRightClick = function()
+			local d = Editor.Sidebar.Views[id]
+			if not d or not d.popout then return end
+			local menu = DermaMenu()
+			menu:SetSkin("Noir")
+			Noir.Utils.AddMenuOption(menu, "Open in Window", function() d.popout() end, "icon16/application_get.png")
+			menu:Open()
+		end
+
 		Editor.Sidebar.ActivityButtons[id] = btn
 	end
 end
@@ -113,7 +127,10 @@ function Editor.Sidebar.ActivateView(id, initial)
 
 	-- Swap the visible view.
 	local prev = Editor.Sidebar.Views[Editor.Sidebar.ActiveView]
-	if prev and prev ~= def and IsValid(prev.panel) then prev.panel:SetVisible(false) end
+	if prev and prev ~= def and IsValid(prev.panel) then
+		prev.panel:SetVisible(false)
+		if prev.onHide then prev.onHide(prev.panel) end
+	end
 	Editor.Sidebar.ActiveView = id
 	if IsValid(def.panel) then def.panel:SetVisible(true) end
 	if IsValid(Editor.Sidebar.HeaderLabel) then Editor.Sidebar.HeaderLabel:SetText(def.title or id) end
@@ -137,9 +154,11 @@ function Editor.Sidebar.Toggle()
 	Editor.Sidebar.Panel:SetVisible(Editor.Config.sidebarVisible)
 	if IsValid(Editor.Sidebar.Resizer) then Editor.Sidebar.Resizer:SetVisible(Editor.Config.sidebarVisible) end
 	Editor.Storage.SaveConfig()
+	local def = Editor.Sidebar.Views[Editor.Sidebar.ActiveView]
 	if Editor.Config.sidebarVisible then
-		local def = Editor.Sidebar.Views[Editor.Sidebar.ActiveView]
 		if def and def.onShow then def.onShow(def.panel) end
+	elseif def and def.onHide then
+		def.onHide(def.panel)
 	end
 
 	Editor.Frame:InvalidateLayout()
@@ -251,6 +270,9 @@ Editor.Sidebar.RegisterView("explorer", {
 	title = "Explorer",
 	icon = "icon16/folder_explore.png",
 	tooltip = "Explorer",
+	-- Pop out into the full file browser window (tree + file table) via the
+	-- activity-bar right-click menu. The sidebar itself stays a lean tree.
+	popout = function() Noir.FileBrowser.Open() end,
 	actions = {
 		{
 			icon = "icon16/arrow_refresh.png",

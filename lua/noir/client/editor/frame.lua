@@ -27,7 +27,11 @@ function Editor.AllPanelsReady()
 	return true
 end
 
-function Editor.UI.CreateFrame()
+-- When `preload` is true the frame is built but kept hidden (no MakePopup, no input
+-- grab, no game-UI dimming). It exists only to warm up the Monaco/console DHTML pages
+-- so the first real Editor.Show() is instant. Editor.Show() reuses the same frame and
+-- makes it a popup on demand.
+function Editor.UI.CreateFrame(preload)
 	-- There is alot of hacky vgui stuff here
 	-- im just trying to get as close to vs-code look as possible
 	if not Editor.Config or Noir.DEBUG then Editor.Storage.LoadConfig() end
@@ -39,7 +43,12 @@ function Editor.UI.CreateFrame()
 	frame:SetDeleteOnClose(false)
 	frame:SetDraggable(true)
 	frame:SetSizable(true)
-	frame:MakePopup()
+	if preload then
+		frame:SetVisible(false)
+	else
+		frame:MakePopup()
+	end
+
 	frame.btnMinim:SetVisible(false)
 	frame.PerformLayout = function()
 		frame.btnClose:SetPos(frame:GetWide() - 31, 0)

@@ -178,21 +178,20 @@ function NDL.Inject(targetTbl, funcName, toInject)
 end
 
 -- Pops the top inject layer, restoring the table entry to whatever was underneath it.
+-- Trace history is retained by design: restoring an inject leaves NDL.traces alone so
+-- captured calls survive teardown for later inspection. Call NDL.WipeTraces to free it.
 function NDL.RestoreInject(targetTbl, funcName)
 	local tblInjects = NDL.injections[targetTbl]
 	if not tblInjects then return end
 	local stack = tblInjects[funcName]
 	if not stack or #stack == 0 then return end
 	local top = table.remove(stack)
-	local original = NDL.originalFuncs[top]
-	rawset(targetTbl, funcName, original)
+	rawset(targetTbl, funcName, NDL.originalFuncs[top])
 	NDL.originalFuncs[top] = nil
-	-- Free any accumulated trace history for this layer (tracers key NDL.traces by
-	-- the function they wrapped, i.e. whatever was underneath = `original`).
-	if original ~= nil then NDL.traces[original] = nil end
 	if #stack == 0 then tblInjects[funcName] = nil end
 end
 
+-- Trace history is retained by design here too; use NDL.WipeTraces to free it.
 function NDL.RestoreAllInjects()
 	for targetTbl, funcs in pairs(NDL.injections) do
 		for funcName, stack in pairs(funcs) do
@@ -205,7 +204,11 @@ function NDL.RestoreAllInjects()
 	end
 
 	NDL.injections = {}
-	-- Every inject is gone, so no trace history is reachable through a live tracer.
+end
+
+-- Drop all retained trace history, freeing anything (entities/tables) it pinned.
+-- Traces are kept across inject restores by default, so this is the explicit way to reclaim them.
+function NDL.WipeTraces()
 	NDL.traces = {}
 end
 
@@ -234,3 +237,5 @@ end
 
 -- Concommand to restore all funcs in case of big bork
 concommand.Add("ndl_restoreall", NDL.RestoreAllInjects)
+-- Concommand to drop all retained trace history from memory.
+concommand.Add("ndl_wipetraces", NDL.WipeTraces)

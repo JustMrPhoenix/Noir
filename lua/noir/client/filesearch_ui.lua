@@ -575,7 +575,7 @@ function PANEL:StartSearch()
 		search.remoteRequestId = requestId
 		-- Server silently drops unauthorized requests; time out the spinner.
 		timer.Simple(5, function()
-			if not Noir.FileSearch.PendingRemote[requestId] then return end
+			if not Noir.Network.IsRequestPending(requestId) then return end
 			-- Closes the channel too (drops our record + aborts any server job).
 			Noir.FileSearch.SendCancel(requestId)
 			search.pendingRemote = false

@@ -178,5 +178,33 @@ function Editor.Console.FocusMain()
 	if Editor.Console.Main then Editor.Tab.SetActive(Editor.Console.Main.name) end
 end
 
+-- Evaluate a one-shot `code` expression on `target` ("self"/"server") and echo its
+-- result into the Main Console, exactly like an editor run (same OnMessage routing).
+-- Used e.g. by the entity-search sidebar to drop a selected entity into the REPL
+-- output. The channel is torn down once the result arrives -- this is for bounded
+-- expressions (no hooks/timers) sent to a single realm; use the editor Run path for
+-- streaming/multi-target runs. Returns the run channel id.
+function Editor.Console.Evaluate(code, target, label)
+	local panel = Editor.Console.GetMainPanel()
+	if not panel then return end
+	target = target or "self"
+	label = label or "Noir.eval"
+	-- Prefer expression form so a bare value (e.g. Entity(5)) is returned and shown,
+	-- not run as a statement that yields nothing (mirrors the REPL's OnCode / EvalCode).
+	if isfunction(CompileString("return " .. code, label, false)) then code = "return " .. code end
+	local id = Noir.Network.OpenChannel("runCode", target)
+	if not id then return end
+	Noir.Environment.RegisterHandler(function(sender, transferId, message, data)
+		local succ, err = pcall(panel.OnMessage, panel, target, label, sender, transferId, message, data)
+		if not succ then panel:AppendText(Format("--[[%s: Could not display output]] %s", label, err)) end
+		-- Bounded single-target expression: drop the channel once its result is in.
+		if message == "run" then Noir.Network.CloseChannel(transferId) end
+	end, id)
+
+	Noir.SendCode(code, label, target, id)
+	Editor.Console.FocusMain()
+	return id
+end
+
 -- Public wrapper: external callers (repl.lua) use Noir.Editor.ShowMainConsole.
 function Editor.ShowMainConsole() return Editor.Console.ShowMain() end

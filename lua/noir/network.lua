@@ -465,6 +465,49 @@ function Network.CloseChannel(channelId, target)
 end
 
 ----------------------------------------------------------------------
+-- request / reply
+----------------------------------------------------------------------
+-- A bounded one-shot over a fresh channel: open a channel to `target`, send
+-- `payload` (a string) as the opening message, and wait for a SINGLE reply on
+-- `message` (default "result"). `onReply(payload, data, sender)` fires once, then
+-- the channel is closed. Returns the request (channel) id. The responder side is an
+-- ordinary ChannelHandlers[type].open that replies via SendOnChannel(id, message,
+-- ...); opening is auth-gated like any channel. Track/cancel via IsRequestPending /
+-- CancelRequest. Use this instead of hand-rolling OpenChannel + OnChannel + a
+-- per-module pending map (see filesearch.lua / entitysearch.lua).
+Network.PendingRequests = Network.PendingRequests or {} -- requestId -> true (in-flight)
+
+function Network.Request(chType, target, payload, onReply, message)
+	message = message or "result"
+	local id = Network.OpenChannel(chType, target)
+	if not id then return end
+	Network.PendingRequests[id] = true
+	Network.OnChannel(id, message, function(sender, channelId, _, data)
+		if not Network.PendingRequests[channelId] then return end
+		Network.PendingRequests[channelId] = nil
+		if onReply then onReply(data.string, data, sender) end
+		-- Bounded op done: close the channel (drops both records).
+		Network.CloseChannel(channelId)
+	end)
+
+	Network.OpenSend(id, payload or "")
+	return id
+end
+
+-- True while a Request is still awaiting its reply (drops on reply or cancel).
+function Network.IsRequestPending(id)
+	return id ~= nil and Network.PendingRequests[id] == true
+end
+
+-- Stop waiting on a Request and tear down its channel. Closing relays to the
+-- responder, so a running server-side job's close handler aborts it too.
+function Network.CancelRequest(id)
+	if not id then return end
+	Network.PendingRequests[id] = nil
+	Network.CloseChannel(id)
+end
+
+----------------------------------------------------------------------
 -- server routing (relay + local delivery)
 ----------------------------------------------------------------------
 -- Quick frame server handling: same auth/relay/local logic as serverHandleHeader
