@@ -1,8 +1,10 @@
 # Noir
 
-Noir is an in-game Lua scratchpad for Garry's Mod. It provides a code editor, a REPL, a file browser, and an execution layer that runs code across realms (self, server, clients, or shared). It is built on [gmod-monaco](https://github.com/Metastruct/gmod-monaco) and requires the GMod chromium branch.
+Noir is an in-game Lua scratchpad for Garry's Mod. It provides a code editor, a REPL, a file browser, and an execution layer that runs code across realms (self, server, clients, or shared). It is built on [gmod-monaco](https://github.com/Metastruct/gmod-monaco) and runs best on the GMod chromium branch.
 
 ![The editor with the file tree open](assets/editor_with_file_tree_open.png)
+
+> More screenshots in [assets folder](https://github.com/JustMrPhoenix/Noir/tree/master/assets)
 
 ## Features
 
