@@ -277,6 +277,27 @@ function Editor.UI.BuildMenuBar(frame)
 	end, "icon16/tag_blue.png")
 
 	tabMenu:AddSpacer():SetTall(10)
+	-- Per-tab entity type (SWEP/SENT). Drives the tab icon and the run flag; a
+	-- --swep/--sent first-line comment or the file path override this manual choice.
+	local entTypeSub, entTypeParent = tabMenu:AddSubMenu("Entity Type")
+	entTypeSub:SetSkin("Noir")
+	entTypeSub:SetDeleteSelf(false)
+	entTypeParent:SetIcon("icon16/bricks.png")
+	Editor.Tab.Menu.entTypeParent = entTypeParent
+	local function setEntType(value)
+		local session = tabMenu.session
+		if not session then return end
+		session.entTypeOverride = value
+		Editor.Session.Update(session.name)
+		Editor.Storage.QueueSave()
+	end
+
+	Noir.Utils.AddMenuOption(entTypeSub, "Auto-detect", function() setEntType(nil) end, "icon16/wand.png")
+	Noir.Utils.AddMenuOption(entTypeSub, "SWEP", function() setEntType("SWEP") end, "icon16/gun.png")
+	Noir.Utils.AddMenuOption(entTypeSub, "SENT", function() setEntType("SENT") end, "icon16/brick.png")
+	Noir.Utils.AddMenuOption(entTypeSub, "None", function() setEntType("none") end, "icon16/cross.png")
+
+	tabMenu:AddSpacer():SetTall(10)
 	tabMenu.autorunOption = Noir.Utils.AddMenuOption(tabMenu, "Add to Autorun", function()
 		if not tabMenu.session.file then return end
 		local path, fileName = tabMenu.session.file[1], tabMenu.session.file[2]

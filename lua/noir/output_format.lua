@@ -19,6 +19,15 @@ local blacklistedTypes = {
 	["proto"] = true
 }
 
+-- Format a number for a vector/angle component: keep up to 3 decimals but strip
+-- trailing zeros so whole numbers stay clean and fractional values aren't lost.
+local function fmtNum(n)
+	if n == math.floor(n) then return fmt("%i", n) end
+	local s = fmt("%.3f", n)
+	s = s:gsub("0+$", ""):gsub("%.$", "")
+	return s
+end
+
 function Format.GetIterator(opts)
 	local mode = istable(opts) and opts.sortMode
 	if mode == "SortedPairs" then
@@ -66,7 +75,11 @@ function Format.DecompileFunc(func, level, doFull)
 	return src, formatSource(debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
 end
 
-function Format.FormatShort(val)
+-- maxLen (optional): cap on how many characters of a string value are escaped/shown.
+-- Escaping runs a per-character gsub, so without a cap a huge string (e.g. an embedded
+-- HTML/JS blob) makes this O(size) and can hang the caller. Callers that walk arbitrary
+-- values (deep find) pass a small cap; normal callers omit it for the full string.
+function Format.FormatShort(val, maxLen)
 	local valType = type(val)
 	if blacklistedTypes[valType] then return tostring(val) end
 	if val == nil then
@@ -81,11 +94,16 @@ function Format.FormatShort(val)
 		end
 	else
 		if isstring(val) then
-			return fmt("\"%s\"", val:gsub(".", stringEscape))
+			local s, extra = val, ""
+			if maxLen and #s > maxLen then
+				s, extra = string.sub(s, 1, maxLen), fmt("..(+%d chars)", #s - maxLen)
+			end
+
+			return fmt("\"%s\"%s", s:gsub(".", stringEscape), extra)
 		elseif isvector(val) then
-			return fmt("Vector(%i,%i,%i)", val.x, val.y, val.z)
+			return fmt("Vector(%s,%s,%s)", fmtNum(val.x), fmtNum(val.y), fmtNum(val.z))
 		elseif isangle(val) then
-			return fmt("Angle(%i,%i,%i)", val.pitch, val.yaw, val.roll)
+			return fmt("Angle(%s,%s,%s)", fmtNum(val.pitch), fmtNum(val.yaw), fmtNum(val.roll))
 		elseif isentity(val) then
 			if val == game.GetWorld() then
 				return fmt("game.GetWorld()")
@@ -117,27 +135,44 @@ function Format.FormatShort(val)
 	end
 end
 
--- Recursively walks a value tree collecting things that match opts.find.
+-- Builds the per-node matcher for a deep find. Returns `record, funcReason`:
+-- record(keyStr, k, v) -> {line, ...}|nil produces 0..2 result lines for one key/value
+-- pair (a key/value match line and/or a function-body match line -- both can fire for the
+-- same pair when a matching key holds a function whose body also matches). funcReason(fn)
+-- searches a Lua function's bytecode string constants plus upvalue names/values and
+-- parameter names (no full decompilation) and returns a short description, or nil.
 -- opts.findKeys / opts.findValues / opts.findFuncs select what to match; opts.findInsensitive
--- lowercases both the term and the candidate before a plain (non-pattern) substring match.
--- Function matching (findFuncs) searches the raw bytecode dump's string constants plus upvalue
--- names/values and parameter names -- no full decompilation needed. Returns a comment header
--- plus one line per match, each showing the access path.
-function Format.DeepFind(root, opts)
-	local rawTerm = opts.find
+-- lowercases both the term and the candidate. opts.findPattern treats the term as a Lua
+-- pattern instead of a plain substring (case-insensitive here just lowercases both, so
+-- uppercase pattern classes like %u/%A keep their meaning against the lowered subject).
+-- Callers validate the pattern up front (Format.DeepFind / DeepFindAsync).
+function Format.MakeFindMatcher(opts)
 	local insensitive = opts.findInsensitive
 	local searchKeys = opts.findKeys
 	local searchValues = opts.findValues
 	local searchFuncs = opts.findFuncs
-	local term = insensitive and string.lower(rawTerm) or rawTerm
+	local plain = not opts.findPattern
+	local scanLimit = Format.FIND_SCAN_LIMIT
+	local term = insensitive and string.lower(opts.find) or opts.find
+	-- Only strings and numbers are matched. We deliberately do NOT tostring arbitrary
+	-- objects: a value in _G can be a multi-MB string, or an entity/userdata whose
+	-- __tostring is slow or non-terminating -- either would hang the whole walk (this is
+	-- what could freeze the game). Strings are also capped to scanLimit chars.
 	local function matches(x)
-		local s = isstring(x) and x or tostring(x)
+		local s
+		if isstring(x) then
+			s = x
+		elseif isnumber(x) then
+			s = tostring(x)
+		else
+			return false
+		end
+
+		if #s > scanLimit then s = string.sub(s, 1, scanLimit) end
 		if insensitive then s = string.lower(s) end
-		return string.find(s, term, 1, true) ~= nil
+		return string.find(s, term, 1, plain) ~= nil
 	end
 
-	-- Searches a Lua function's string constants, upvalue names/values and parameter names.
-	-- Returns a short description of what matched, or nil.
 	local function funcReason(fn)
 		if debug.getinfo(fn, "S").what == "C" then return end
 		local ok, data = pcall(jit.decompiler2.metadata, fn)
@@ -161,69 +196,195 @@ function Format.DeepFind(root, opts)
 		return #hits > 0 and table.concat(hits, ", ") or nil
 	end
 
+	-- Cheap per-pair match test -- NO access-path string is built here. Returns a small
+	-- descriptor (or nil) so the walk can build the (relatively expensive) keyStr only when
+	-- there is actually something to report. Tables are recursed into, not value-matched;
+	-- functions go through funcReason.
+	local function test(k, v)
+		local key = searchKeys and matches(k) or false
+		local val = searchValues and not istable(v) and not isfunction(v) and matches(v) or false
+		local reason
+		if searchFuncs and isfunction(v) then reason = funcReason(v) end
+		if key or val or reason then return {key = key, val = val, reason = reason} end
+	end
+
+	-- Build the result line(s) for a confirmed match (this is where FormatShort runs).
+	-- The preview cap keeps escaping a matched multi-MB string from hanging here.
+	local preview = Format.FIND_PREVIEW_LEN
+	local function render(keyStr, v, desc)
+		local lines
+		if desc.key or desc.val then
+			local valStr, cmt = Format.FormatShort(v, preview)
+			local tag = desc.key and desc.val and "key+value" or desc.key and "key" or "value"
+			lines = {fmt("%s = %s, -- [%s]%s", keyStr, valStr, tag, cmt and (" " .. cmt) or "")}
+		end
+
+		if desc.reason then
+			local valStr, cmt = Format.FormatShort(v, preview)
+			local line = fmt("%s = %s, -- [func: %s]%s", keyStr, valStr, desc.reason, cmt and (" " .. cmt) or "")
+			if lines then lines[#lines + 1] = line else lines = {line} end
+		end
+
+		return lines
+	end
+
+	return test, render, funcReason
+end
+
+-- Assembles the "-- N matches for ..." header describing a find's scope/result count.
+function Format.FindHeader(opts, count, truncated, max)
+	local scopes = {}
+	if opts.findKeys then scopes[#scopes + 1] = "keys" end
+	if opts.findValues then scopes[#scopes + 1] = "values" end
+	if opts.findFuncs then scopes[#scopes + 1] = "functions" end
+	local flags = {}
+	if opts.findPattern then flags[#flags + 1] = "pattern" end
+	if opts.findInsensitive then flags[#flags + 1] = "case-insensitive" end
+	local suffix = #flags > 0 and (" (" .. table.concat(flags, ", ") .. ")") or ""
+	local header = fmt(
+		"-- %d match%s for \"%s\" in %s%s",
+		count, count == 1 and "" or "es", opts.find, table.concat(scopes, "+"), suffix
+	)
+	if truncated then header = header .. fmt(", showing first %d", max) end
+	return header
+end
+
+-- Assembles the final find output string (header + one line per match). `elapsed`
+-- (seconds), when given, is appended to the header so completed async walks report timing.
+local function findText(opts, results, truncated, max, elapsed)
+	local header = Format.FindHeader(opts, #results, truncated, max)
+	if elapsed then header = header .. fmt(" (took %.2fs)", elapsed) end
+	if #results == 0 then return header end
+	return header .. "\n" .. table.concat(results, "\n")
+end
+
+-- Keys we match but don't recurse into: self-referential / duplicate-heavy globals and
+-- metatable __index chains (mirrors Facepunch's developer_functions lua_find). Skipping
+-- descent cuts both walk time and noise; the key itself is still matched. FIND_MAX_DEPTH
+-- caps recursion so an adversarial deep chain can't overflow the Lua call stack.
+Format.FIND_SKIP_KEYS = {_G = true, _R = true, _M = true, _E = true, _LOADED = true, __index = true}
+Format.FIND_MAX_DEPTH = 100
+-- Bounds so a single pathological value can't hang the walk: _G holds multi-MB strings
+-- (embedded HTML/JS, caches). SCAN_LIMIT caps how much of a candidate string we match
+-- against; PREVIEW_LEN caps how much of a matched string we escape+show.
+Format.FIND_SCAN_LIMIT = 8192
+Format.FIND_PREVIEW_LEN = 160
+local function findSkip(k) return Format.FIND_SKIP_KEYS[k] == true end
+
+-- Builds a value's access path: a dotted path for safe string keys, else a bracketed
+-- FormatShort of the key. Shared by the sync + async walks; only called on a match or a
+-- recurse (never per non-matching leaf), so its cost stays off the hot path.
+function Format.FindKeyStr(path, k)
+	if isstring(k) and Noir.Utils.IsSafeKey(k) then
+		return path == "" and k or (path .. "." .. k)
+	end
+
+	-- Cap: a key can itself be a huge string, whose escaping would otherwise hang here.
+	return path .. fmt("[%s]", Format.FormatShort(k, Format.FIND_PREVIEW_LEN))
+end
+
+-- For a pattern find, returns an error header if the Lua pattern is malformed (so we fail
+-- with a clear message instead of erroring on every candidate mid-walk), else nil.
+local function findPatternError(opts)
+	if not opts.findPattern then return end
+	local term = opts.findInsensitive and string.lower(opts.find) or opts.find
+	if pcall(string.find, "", term) then return end
+	return fmt("-- invalid Lua pattern: \"%s\"", opts.find)
+end
+
+-- Synchronous deep find over a value tree matching opts.find. Kept for EvalCode /
+-- direct FormatLong callers; the REPL run path uses Format.DeepFindAsync so a large
+-- walk doesn't freeze the realm it runs on. Returns a comment header plus one line
+-- per match, each showing the access path.
+function Format.DeepFind(root, opts)
+	local patternErr = findPatternError(opts)
+	if patternErr then return patternErr end
+	local test, render, funcReason = Format.MakeFindMatcher(opts)
 	local results = {}
 	local seen = {}
-	local MAX = 500
+	local max = opts.findMaxResults or 500
+	local maxDepth = opts.findMaxDepth or Format.FIND_MAX_DEPTH
 	local truncated = false
-	-- Records any match for a single key/value pair under keyStr.
-	local function record(keyStr, k, v)
-		local matchedKey = searchKeys and matches(k)
-		-- Tables are recursed into rather than matched as values; functions go through funcReason.
-		local matchedVal = searchValues and not istable(v) and not isfunction(v) and matches(v)
-		if matchedKey or matchedVal then
-			local valStr, cmt = Format.FormatShort(v)
-			local tag = matchedKey and matchedVal and "key+value" or matchedKey and "key" or "value"
-			results[#results + 1] = fmt("%s = %s, -- [%s]%s", keyStr, valStr, tag, cmt and (" " .. cmt) or "")
-		end
 
-		if searchFuncs and isfunction(v) then
-			local reason = funcReason(v)
-			if reason then
-				local valStr, cmt = Format.FormatShort(v)
-				results[#results + 1] = fmt("%s = %s, -- [func: %s]%s", keyStr, valStr, reason, cmt and (" " .. cmt) or "")
-			end
-		end
-	end
-
-	local function recurse(tbl, path)
-		if seen[tbl] then return end
-		seen[tbl] = true
-		for k, v in pairs(tbl) do
-			if #results >= MAX then
-				truncated = true
-				return
-			end
-
-			local keyStr
-			if isstring(k) and Noir.Utils.IsSafeKey(k) then
-				keyStr = path == "" and k or (path .. "." .. k)
-			else
-				keyStr = path .. fmt("[%s]", Format.FormatShort(k))
-			end
-
-			record(keyStr, k, v)
-			if istable(v) and not IsColor(v) then recurse(v, keyStr) end
-		end
-	end
-
+	-- Breadth-first (see Noir.TableSearch): the first time a table is reached is via a
+	-- shortest path, so matches/paths under it use the fewest-hops access path.
 	if istable(root) and not IsColor(root) then
-		recurse(root, "")
-	elseif searchFuncs and isfunction(root) then
+		local queue = {{root, "", 0}}
+		seen[root] = true
+		local head = 1
+		while head <= #queue and not truncated do
+			local node = queue[head]
+			queue[head] = false
+			head = head + 1
+			local tbl, path, depth = node[1], node[2], node[3]
+			for k, v in pairs(tbl) do
+				if #results >= max then truncated = true break end
+				local desc = test(k, v)
+				local enqueue = depth < maxDepth and istable(v) and not IsColor(v)
+					and not seen[v] and not findSkip(k)
+				if desc or enqueue then
+					local keyStr = Format.FindKeyStr(path, k)
+					if desc then
+						local lines = render(keyStr, v, desc)
+						for i = 1, #lines do
+							results[#results + 1] = lines[i]
+							if #results >= max then
+								truncated = true
+								break
+							end
+						end
+					end
+
+					if enqueue then
+						seen[v] = true
+						queue[#queue + 1] = {v, keyStr, depth + 1}
+					end
+				end
+			end
+		end
+	elseif opts.findFuncs and isfunction(root) then
 		local reason = funcReason(root)
 		if reason then results[#results + 1] = fmt("%s -- [func: %s]", Format.FormatShort(root), reason) end
 	end
 
-	local scopes = {}
-	if searchKeys then scopes[#scopes + 1] = "keys" end
-	if searchValues then scopes[#scopes + 1] = "values" end
-	if searchFuncs then scopes[#scopes + 1] = "functions" end
-	local header = fmt(
-		"-- %d match%s for \"%s\" in %s%s",
-		#results, #results == 1 and "" or "es", rawTerm, table.concat(scopes, "+"), insensitive and " (case-insensitive)" or ""
-	)
-	if truncated then header = header .. fmt(", showing first %d", MAX) end
-	if #results == 0 then return header end
-	return header .. "\n" .. table.concat(results, "\n")
+	return findText(opts, results, truncated, max)
+end
+
+-- Asynchronous deep find: walks a table root off Noir.TableSearch's time-budgeted
+-- driver (so it never freezes the realm), then calls onDone(finalString). A non-table
+-- (or bare-function) root is cheap and handled synchronously. Returns the running job
+-- (or nil for the synchronous path) so callers can cancel it.
+function Format.DeepFindAsync(root, opts, onDone)
+	local patternErr = findPatternError(opts)
+	if patternErr then
+		onDone(patternErr)
+		return
+	end
+
+	local max = opts.findMaxResults or 500
+	if not istable(root) or IsColor(root) then
+		local results = {}
+		if opts.findFuncs and isfunction(root) then
+			local _, _, funcReason = Format.MakeFindMatcher(opts)
+			local reason = funcReason(root)
+			if reason then results[1] = fmt("%s -- [func: %s]", Format.FormatShort(root), reason) end
+		end
+
+		onDone(findText(opts, results, false, max))
+		return
+	end
+
+	local test, render = Format.MakeFindMatcher(opts)
+	return Noir.TableSearch.Start({
+		root = root,
+		test = test,
+		render = render,
+		skipDescend = findSkip,
+		frameBudget = opts.findBudgetMs and (opts.findBudgetMs / 1000) or nil,
+		maxResults = max,
+		maxDepth = opts.findMaxDepth,
+		onDone = function(job) onDone(findText(opts, job.results, job.truncated, max, job.elapsed)) end
+	})
 end
 
 function Format.FormatLong(val, level, opts, doneTbls)
@@ -240,6 +401,9 @@ function Format.FormatLong(val, level, opts, doneTbls)
 	if blacklistedTypes[valType] then return tostring(val) end
 	level = level or 0
 	doneTbls = doneTbls or {}
+	-- Pre-formatted passthrough: an already-assembled string (e.g. an async find result)
+	-- is delivered verbatim rather than re-quoted or re-searched.
+	if opts.preformatted and level == 0 and isstring(val) then return val end
 	-- Deep-find modes search the whole value tree (incl. functions) and produce their own output
 	if opts.find and level == 0 then return Format.DeepFind(val, opts) end
 	local levelIndent = string.rep("    ", level)
@@ -459,4 +623,43 @@ function Format.RegisterDashboard()
 		description = "Output formatting settings"
 	})
 	Format.DashboardRegistered = true
+
+	-- Async table-search (--find*) performance knobs, carried in the run data and
+	-- applied on whichever realm runs the walk (see Noir.SendCode / Format.DeepFindAsync).
+	if Format.SearchDashboardRegistered then Noir.Dashboard.Unregister("Search") end
+	Noir.Dashboard.Register("Search", {
+		{
+			key = "frameBudgetMs",
+			type = "slider",
+			label = "Frame budget (ms)",
+			description = "How long a --find table walk may work per frame. Higher = faster searches, lower = smoother framerate.",
+			default = 16,
+			min = 1,
+			max = 33,
+			decimals = 0,
+			category = "Performance"
+		},
+		{
+			key = "maxResults",
+			type = "number",
+			label = "Max results",
+			description = "Cap on the number of matches a --find search collects before stopping.",
+			default = 500,
+			min = 1,
+			category = "Performance"
+		},
+		{
+			key = "maxDepth",
+			type = "number",
+			label = "Max depth",
+			description = "How deep a --find search recurses into nested tables before stopping (guards against pathological trees).",
+			default = 100,
+			min = 1,
+			category = "Performance"
+		}
+	}, {
+		icon = "icon16/magnifier.png",
+		description = "Deep-find (--find) search settings"
+	})
+	Format.SearchDashboardRegistered = true
 end

@@ -919,9 +919,9 @@ function Dashboard.CreateControl(parent, setting, tabName)
 		viewBtn.DoClick = function()
 			local ent = Dashboard.Values[setting.fullKey]
 			if IsValid(ent) then
-				Noir.EntitySelector.SetHighlight(ent)
+				Noir.EntityHighlight.Set(ent)
 				-- Genuine delay: flash the highlight for 2s as a preview, then clear it.
-				timer.Simple(2, function() Noir.EntitySelector.StopHighlight() end)
+				timer.Simple(2, function() Noir.EntityHighlight.Clear() end)
 			end
 		end
 

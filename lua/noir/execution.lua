@@ -84,13 +84,70 @@ local function logRun(verb, sender, transferId, data)
 		Color(255, 255, 255), "]\n")
 end
 
+-- In-flight async --find jobs, keyed by run channel id, so a channel close (teardown
+-- or disconnect) can cancel the walk mid-search. See Format.DeepFindAsync.
+local FindJobs = {}
+
 -- Run `code` in a fresh context for `runner` and reply with the formatted result
 -- on `transferId` (`data` carries the output-format opts). Shared by the local
 -- "self" path and the channel receive handler.
 local function runAndReply(runner, transferId, code, identifier, vars, data)
 	local context = Noir.Environment.CreateContext(runner, transferId, vars)
+
+	-- SWEP/SENT auto-mode: the client flags the run's ent type (data.entType), so we
+	-- wrap the body in the easylua-style Start/End and the user only writes the
+	-- SWEP/ENT body. Registration runs in whichever realm executes the code, so a
+	-- "shared" run registers on both client and server.
+	local entType = data.entType
+	if entType == "SWEP" then
+		Noir.StartWeapon(data.entClass, context.Upvalues)
+	elseif entType == "SENT" then
+		Noir.StartEntity(data.entClass, context.Upvalues)
+	end
+
 	local done, returns = Noir.RunCode(code, identifier, context.EnvTable)
+
+	if entType == "SWEP" or entType == "SENT" then
+		-- Only auto-finish if the build is still open -- a body that called endswep/
+		-- endsent itself already cleared it, so we don't double-register.
+		local building = entType == "SWEP" and context.Upvalues.SWEP or context.Upvalues.ENT
+		if done and istable(building) then
+			local finish = entType == "SWEP" and Noir.EndWeapon or Noir.EndEntity
+			local ok, err = pcall(finish, context.Upvalues, {spawn = data.spawn, reinit = true})
+			if not ok then done, returns = false, err end
+		else
+			-- Broken run, or a stray half-built build: drop it so it can't leak.
+			Noir.ClearEntityBuild(context.Upvalues)
+		end
+	end
+
 	context.RunResults = {done, returns}
+
+	-- --find* deep search: walk the returned value asynchronously (off Noir.TableSearch's
+	-- time-budgeted driver) so a large tree like _G doesn't freeze this realm. The result
+	-- comes back on the same channel once complete, pre-formatted so the console shows it
+	-- verbatim (opts.preformatted short-circuits FormatLong).
+	if done and data.find then
+		local job = Noir.Format.DeepFindAsync(returns[1], data, function(text)
+			FindJobs[transferId] = nil
+			Noir.Environment.SendMessage(runner, transferId, "run", {true, {text}, opts = {preformatted = true}})
+		end)
+
+		-- A job means the walk is running in the background (a non-table root replies
+		-- instantly, so no indicator is needed there). Emit an immediate "searching"
+		-- status as plain output -- it shows the search is ongoing without consuming the
+		-- run's answer, so the real result still lands as the answer when it completes.
+		if job then
+			FindJobs[transferId] = job
+			Noir.Environment.SendMessage(runner, transferId, "searching", {
+				Format("-- searching for %q ...", data.find),
+				opts = {preformatted = true}
+			})
+		end
+
+		return
+	end
+
 	if not done and not isstring(returns) then returns = Noir.Format.FormatLong(returns, 0, data) end
 	Noir.Environment.SendMessage(runner, transferId, "run", {
 		done,
@@ -104,7 +161,7 @@ local function runAndReply(runner, transferId, code, identifier, vars, data)
 	end
 end
 
-function Noir.SendCode(code, identifier, target, transferId)
+function Noir.SendCode(code, identifier, target, transferId, opts)
 	if util.NetworkStringToID(Noir.Network.Tag) == 0 and target ~= "self" then
 		Noir.ErrorT("This server does not seem to run Noir")
 		return
@@ -132,6 +189,14 @@ function Noir.SendCode(code, identifier, target, transferId)
 		data.sortMode = Noir.Dashboard.Get("Output", "tableSort")
 	end
 
+	-- SWEP/SENT auto-mode: an explicit flag set by the caller (the editor knows a tab's
+	-- type). Rides to the target realm, where runAndReply wraps the body in Start/End.
+	if istable(opts) and (opts.entType == "SWEP" or opts.entType == "SENT") then
+		data.entType = opts.entType
+		data.entClass = opts.entClass
+		data.spawn = opts.spawn and true or false
+	end
+
 	-- Parse output format flags
 	local lowerCode = string.lower(code)
 	if string.find(lowerCode, "%-%-full") then data.full = true end
@@ -140,13 +205,30 @@ function Noir.SendCode(code, identifier, target, transferId)
 	if string.find(lowerCode, "%-%-values") then data.values = true end
 	local depthMatch = string.match(lowerCode, "%-%-depth%s+(%d+)")
 	if depthMatch then data.depth = tonumber(depthMatch) end
-	-- Parse deep-find flags: --find/--findi (keys+values), --findk/--findki (keys only),
-	-- --findv/--findvi (values only), --findf/--findfi (function bodies: string constants,
-	-- upvalue names/values and parameter names). The "i" suffix makes the search
-	-- case-insensitive. The search term is the next whitespace-delimited token (matched
-	-- against the original case-preserved code so case-sensitive searches work). More
-	-- specific flags first so prefixes (e.g. --find) don't shadow them.
+	-- Parse deep-find flags. The base --find is a case-insensitive Lua-pattern search over
+	-- keys+values (the intuitive default); --findre is an explicit alias and --findfre does
+	-- the same over function bodies (string constants, upvalue names/values, parameter
+	-- names). The literal (plain-substring) variants are --findi/--find[k|v|f] and their "i"
+	-- (case-insensitive) forms --find[k|v|f]i. The search term is the next whitespace-
+	-- delimited token (matched against the original case-preserved code). More specific
+	-- flags first so prefixes (e.g. --find) don't shadow them.
 	local findSpecs = {
+		{
+			flag = "findfre",
+			keys = false,
+			values = false,
+			funcs = true,
+			insensitive = true,
+			pattern = true
+		},
+		{
+			flag = "findre",
+			keys = true,
+			values = true,
+			funcs = false,
+			insensitive = true,
+			pattern = true
+		},
 		{
 			flag = "findki",
 			keys = true,
@@ -197,11 +279,14 @@ function Noir.SendCode(code, identifier, target, transferId)
 			insensitive = true
 		},
 		{
+			-- Default find is pattern + case-insensitive (the intuitive default); use the
+			-- literal variants (--findi / --findk / ...) when you need a plain substring.
 			flag = "find",
 			keys = true,
 			values = true,
 			funcs = false,
-			insensitive = false
+			insensitive = true,
+			pattern = true
 		},
 	}
 
@@ -213,8 +298,23 @@ function Noir.SendCode(code, identifier, target, transferId)
 			data.findValues = spec.values
 			data.findFuncs = spec.funcs
 			data.findInsensitive = spec.insensitive
+			data.findPattern = spec.pattern
 			break
 		end
+	end
+
+	-- Ship the client's async-search perf settings with the run so the target realm
+	-- (which runs the walk) uses them; falls back to Format.DeepFindAsync defaults otherwise.
+	if data.find and CLIENT and Noir.Dashboard then
+		data.findBudgetMs = Noir.Dashboard.Get("Search", "frameBudgetMs")
+		data.findMaxResults = Noir.Dashboard.Get("Search", "maxResults")
+		data.findMaxDepth = Noir.Dashboard.Get("Search", "maxDepth")
+	end
+
+	-- Track the find so the HUD can surface a long-running one (the walk may run on
+	-- the server, so there's no local job to poll).
+	if data.find and CLIENT and Noir.SearchHUD then
+		Noir.SearchHUD.TrackFind(transferId, identifier)
 	end
 
 	if target == "self" then
@@ -252,7 +352,7 @@ end
 -- called from a client or the server. For a synchronous LOCAL eval that returns
 -- real Lua values (not formatted strings) use Noir.EvalCode instead.
 ----------------------------------------------------------------------
-function Noir.Run(code, target, onResult, identifier)
+function Noir.Run(code, target, onResult, identifier, opts)
 	identifier = identifier or "Noir.Run"
 	local id = Noir.Network.OpenChannel("runCode", target)
 	if not id then return end
@@ -268,7 +368,7 @@ function Noir.Run(code, target, onResult, identifier)
 		end, id, "run")
 	end
 
-	Noir.SendCode(code, identifier, target, id)
+	Noir.SendCode(code, identifier, target, id, opts)
 	return id
 end
 
@@ -295,8 +395,14 @@ Noir.Network.ChannelHandlers["runCode"] = {
 		logRun("Running", sender, transferId, data)
 		runAndReply(sender, transferId, data.string, data.identifier, data.vars, data)
 	end,
-	-- Teardown: free the run context this endpoint created (keyed by initiator).
+	-- Teardown: cancel any in-flight --find walk and free the run context this
+	-- endpoint created (keyed by initiator).
 	close = function(transferId, ch)
+		if FindJobs[transferId] then
+			Noir.TableSearch.CancelJob(FindJobs[transferId])
+			FindJobs[transferId] = nil
+		end
+
 		local contexts = Noir.Environment.Contexts[ch.opener]
 		if contexts then contexts[transferId] = nil end
 	end

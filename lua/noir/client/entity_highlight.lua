@@ -1,5 +1,6 @@
-﻿local Highlight = {}
-Highlight.Entities = {}
+﻿local Highlight = Noir.EntityHighlight or {}
+Noir.EntityHighlight = Highlight
+Highlight.Entities = Highlight.Entities or {}
 Highlight.HookId = "NoirEntityHighlight"
 Highlight.OutlineColor = Color(0, 255, 100, 255)
 local function renderHighlight()
@@ -78,19 +79,4 @@ function Highlight.Clear()
 	hook.Remove("PostDrawOpaqueRenderables", Highlight.HookId)
 end
 
--- Stop is alias for Clear (backwards compatibility)
-Highlight.Stop = Highlight.Clear
--- Get all highlighted entities
-function Highlight.GetEntities()
-	local result = {}
-	for ent in pairs(Highlight.Entities) do
-		if IsValid(ent) then table.insert(result, ent) end
-	end
-	return result
-end
-
--- Backwards compatibility
-function Highlight.GetEntity()
-	return next(Highlight.Entities)
-end
 return Highlight

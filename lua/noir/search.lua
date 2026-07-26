@@ -14,20 +14,24 @@ Noir.Search = Search
 ----------------------------------------------------------------------
 -- Comparison helpers
 ----------------------------------------------------------------------
-local function compare(a, b)
+-- `lb` is the caller-supplied lowercase fold of `b`. It's loop-invariant across an
+-- entity scan, so callers fold it once (Noir.Utils.UTF8Lower) and pass it in rather
+-- than re-folding the search string for every entity. Utils.UTF8Lower folds ASCII
+-- *and* the UTF8 letters in its table, so non-ASCII nicks match without needing GLib.
+local function compare(a, b, lb)
 	if a == b then return true end
 	if a:find(b, nil, true) then return true end
-	-- Case-insensitive pass. Utils.UTF8Lower folds ASCII *and* the UTF8 letters in
-	-- its table, so non-ASCII nicks match without needing GLib.
-	local la, lb = Noir.Utils.UTF8Lower(a), Noir.Utils.UTF8Lower(b)
+	-- Case-insensitive pass.
+	lb = lb or Noir.Utils.UTF8Lower(b)
+	local la = Noir.Utils.UTF8Lower(a)
 	if la == lb then return true end
 	if la:find(lb, nil, true) then return true end
 	return false
 end
 
-local function compareentity(ent, str)
-	if ent.GetName and compare(ent:GetName(), str) then return true end
-	if ent:GetModel() and compare(ent:GetModel(), str) then return true end
+local function compareentity(ent, str, lstr)
+	if ent.GetName and compare(ent:GetName(), str, lstr) then return true end
+	if ent:GetModel() and compare(ent:GetModel(), str, lstr) then return true end
 	return false
 end
 
@@ -171,30 +175,21 @@ end
 ----------------------------------------------------------------------
 -- Magic search tables ("all", "us", ...)
 --
--- `func` is a predicate selecting which entities the object operates on (nil =
--- every entity). Calling the table returns the matching list; indexing/assigning
--- routes through Search.Wrap so method calls fan out and chain.
+-- `func` is a predicate selecting which entities to gather (nil = every entity).
+-- The result is a Search.Wrap'd collection, so it *is* a usable table by default
+-- (iterate it, index it, assign to it) with the chain metatable already attached
+-- -- method calls and field assignments fan out over the members, and calling it
+-- (`all()`) returns the wrapped table too (ChainMeta:__call). The membership is a
+-- snapshot taken when it's built (target-side, in Search.PopulateVars); entities
+-- created/removed afterwards aren't reflected.
 ----------------------------------------------------------------------
-local AllMeta = {}
-function AllMeta:__call()
+function Search.CreateAllFunction(func)
 	local results = {}
 	for _, ent in pairs(ents.GetAll()) do
-		if not self.func or self.func(ent) then results[#results + 1] = ent end
+		if not func or func(ent) then results[#results + 1] = ent end
 	end
 
-	return results
-end
-
-function AllMeta:__index(key)
-	return Search.Wrap(self())[key]
-end
-
-function AllMeta:__newindex(key, value)
-	Search.Wrap(self())[key] = value
-end
-
-function Search.CreateAllFunction(func)
-	return setmetatable({func = func}, AllMeta)
+	return Search.Wrap(results)
 end
 
 ----------------------------------------------------------------------
@@ -228,50 +223,9 @@ Noir.Network.ChannelHandlers["setClipboard"] = {
 	end
 }
 
--- `create`: spawn an entity (or a prop from a model path) at where the runner is
--- looking, wired into undo/cleanup. Server-only -- entities are authoritative there.
-function Search.CreateEntity(class, vars, callback)
-	if CLIENT then
-		Noir.Error("create() can only spawn entities on the server\n")
-		return NULL
-	end
-
-	if not isstring(class) then return NULL end
-	local ent
-	if string.GetExtensionFromFilename(class) == "mdl" then
-		ent = ents.Create("prop_physics")
-		if IsValid(ent) then ent:SetModel(class) end
-	else
-		ent = ents.Create(class)
-	end
-
-	if not IsValid(ent) then return NULL end
-
-	-- Let the caller configure the entity (model, keyvalues, ...) before spawn.
-	if isfunction(callback) then callback(ent) end
-
-	ent:Spawn()
-	ent:Activate()
-
-	-- Drop it in just above where the runner is aiming and settle it onto the
-	-- ground (mirrors easylua's BoundingRadius lift + DropToFloor).
-	local pos = vars.there or (IsValid(vars.me) and vars.me:GetPos()) or vector_origin
-	ent:SetPos(pos + Vector(0, 0, ent:BoundingRadius() * 2))
-	ent:DropToFloor()
-	local phys = ent:GetPhysicsObject()
-	if IsValid(phys) then phys:Wake() end
-
-	local owner = IsValid(vars.me) and vars.me or nil
-	if owner then
-		undo.Create("Noir: " .. class)
-			undo.AddEntity(ent)
-			undo.SetPlayer(owner)
-		undo.Finish()
-		cleanup.Add(owner, "noir_entities", ent)
-	end
-
-	return ent
-end
+-- `create` (Noir.CreateEntity) and the SWEP/SENT authoring helpers live in
+-- entity_create.lua now -- they are "create" helpers, not "search". PopulateVars
+-- below still injects them into the run env as closures over `vars`.
 
 ----------------------------------------------------------------------
 -- FindEntity
@@ -283,6 +237,7 @@ end
 function Search.FindEntity(str, vars)
 	vars = vars or {}
 	if not str then return NULL end
+	if #str:Trim() == 0 then return NULL end
 	str = tostring(str)
 	if str == "#this" and IsEntity(vars.this) and vars.this:IsValid() then return vars.this end
 	if str == "#me" and IsEntity(vars.me) and vars.me:IsPlayer() then return vars.me end
@@ -347,7 +302,11 @@ function Search.FindEntity(str, vars)
 		end
 	end
 
-	-- search in sensible order
+	-- search in sensible order. The case-insensitive fold of the search string is
+	-- loop-invariant across every scan below, so compute it once and pass it into
+	-- compare/compareentity rather than re-folding per player/entity.
+	local lstr = Noir.Utils.UTF8Lower(str)
+
 	-- search exact
 	for _, ply in pairs(player.GetAll()) do
 		if ply:Nick() == str then return ply end
@@ -355,7 +314,7 @@ function Search.FindEntity(str, vars)
 
 	-- Search bots so we target those first
 	for key, ply in pairs(player.GetBots()) do
-		if compare(ply:Nick(), str) then return ply end
+		if compare(ply:Nick(), str, lstr) then return ply end
 	end
 
 	-- search from beginning of nick
@@ -365,14 +324,14 @@ function Search.FindEntity(str, vars)
 
 	-- Search normally and search with colorcode stripped
 	for key, ply in pairs(player.GetAll()) do
-		if compare(ply:Nick(), str) then return ply end
-		if compare(ply:Nick():gsub("%^%d", ""), str) then return ply end
+		if compare(ply:Nick(), str, lstr) then return ply end
+		if compare(ply:Nick():gsub("%^%d", ""), str, lstr) then return ply end
 	end
 
 	-- entity by name/model -- prefer the match closest to where the runner aims
 	local nameMatches = {}
 	for _, ent in pairs(ents.GetAll()) do
-		if compareentity(ent, str) then nameMatches[#nameMatches + 1] = ent end
+		if compareentity(ent, str, lstr) then nameMatches[#nameMatches + 1] = ent end
 	end
 
 	if #nameMatches > 0 then
@@ -390,9 +349,12 @@ function Search.FindEntity(str, vars)
 			str = _str
 		end
 
+		-- Re-fold only if the trailing selector number changed the string; otherwise
+		-- reuse the fold computed above.
+		local lclass = idx and Noir.Utils.UTF8Lower(str) or lstr
 		local found = {}
 		for _, ent in pairs(ents.GetAll()) do
-			if compare(ent:GetClass(), str) then table.insert(found, ent) end
+			if compare(ent:GetClass(), str, lclass) then table.insert(found, ent) end
 		end
 
 		if #found == 0 then return NULL end
@@ -427,7 +389,11 @@ function Search.PopulateVars(vars, runner)
 	-- client targets; fall back to a live query on whatever realm the code runs in.
 	vars.these = Search.CreateAllFunction(function(v)
 		local list = vars.__constrained
-		if not list and IsValid(vars.this) then list = constraint.GetAllConstrainedEntities(vars.this) end
+		-- constraint.GetAllConstrainedEntities is server-only; on a client target we
+		-- rely on the server-computed vars.__constrained and otherwise fall back empty.
+		if not list and IsValid(vars.this) and constraint.GetAllConstrainedEntities then
+			list = constraint.GetAllConstrainedEntities(vars.this)
+		end
 		return list ~= nil and table.HasValue(list, v) or false
 	end)
 	-- allof("npc_zombie") / allof(someEnt) -> all entities sharing that class.
@@ -437,6 +403,12 @@ function Search.PopulateVars(vars, runner)
 	end
 
 	vars.copy = function(value) return Search.CopyToClipboard(value, runner) end
-	vars.create = function(class, callback) return Search.CreateEntity(class, vars, callback) end
 	vars.E = function(str) return Search.FindEntity(str, vars) end
+	-- create/SWEP/SENT authoring helpers (impl in entity_create.lua), bound to this
+	-- context's `vars` so they position/give relative to the runner.
+	vars.create = function(class, callback) return Noir.CreateEntity(class, vars, callback) end
+	vars.startswep = function(class) return Noir.StartWeapon(class, vars) end
+	vars.endswep = function(opts) return Noir.EndWeapon(vars, opts) end
+	vars.startsent = function(class) return Noir.StartEntity(class, vars) end
+	vars.endsent = function(opts) return Noir.EndEntity(vars, opts) end
 end

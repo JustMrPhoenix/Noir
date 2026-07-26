@@ -107,7 +107,7 @@ local function drawPickModeHUD()
 		if ent:GetModel() then info = info .. "\n" .. ent:GetModel() end
 		draw.SimpleText(info, "DermaDefault", cx, h - 80, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
 	else
-		Highlight.Stop()
+		Highlight.Clear()
 	end
 end
 
@@ -158,7 +158,7 @@ end
 function EntitySelector.StopPickMode()
 	if not EntitySelector.PickMode then return end
 	EntitySelector.PickMode = false
-	Highlight.Stop()
+	Highlight.Clear()
 	hook.Remove("HUDPaint", HOOK_ID .. "_Pick")
 	hook.Remove("PlayerBindPress", HOOK_ID .. "_Bind")
 	hook.Remove("PlayerButtonDown", HOOK_ID .. "_Key")
@@ -288,7 +288,7 @@ function PANEL:Init()
 	self.ModelEntry.OnEnter = searchBtn.DoClick
 	self.ListView.OnRowSelected = function(_, _, row) if IsValid(row.Entity) then Highlight.Set(row.Entity) end end
 	self.ListView.DoDoubleClick = function(_, _, row) self:SelectEntity(row.Entity, row) end
-	self.ListView.OnCursorExited = function() Highlight.Stop() end
+	self.ListView.OnCursorExited = function() Highlight.Clear() end
 	self.SelectBtn.DoClick = function()
 		local _, row = self.ListView:GetSelectedLine()
 		if row then self:SelectEntity(row.Entity, row) end
@@ -346,14 +346,14 @@ end
 -- Run a query (mode "filter" / "nearby" / "lua") across the selected realm(s).
 -- Clear the in-world highlight and drop the list selection (de-select).
 function PANEL:ClearHighlight()
-	Highlight.Stop()
+	Highlight.Clear()
 	if IsValid(self.ListView) then self.ListView:ClearSelection() end
 end
 
 function PANEL:RunQuery(mode, params)
 	self.LastQuery = {mode = mode, params = params}
 	-- A fresh search de-selects: the previously highlighted row is about to vanish.
-	Highlight.Stop()
+	Highlight.Clear()
 	self.ListView:Clear()
 	-- Drop any in-flight server request so its late reply can't append to a list
 	-- we've just cleared (e.g. after switching to Local-only or re-searching).
@@ -447,7 +447,7 @@ function PANEL:SelectEntity(ent, row)
 		end
 
 		if opts.filter and not opts.filter(ent) then return end
-		Highlight.Stop()
+		Highlight.Clear()
 		self.Selecting = true
 		opts.onSelect(ent)
 		if IsValid(self.HostFrame) then self.HostFrame:Remove() end
@@ -469,7 +469,7 @@ function PANEL:SendToConsole(ent, row)
 end
 
 function PANEL:OnRemove()
-	Highlight.Stop()
+	Highlight.Clear()
 	if self.PendingRemote then
 		Noir.EntitySearch.SendCancel(self.PendingRemote)
 		self.PendingRemote = nil
@@ -517,19 +517,9 @@ end
 
 function EntitySelector.Close()
 	EntitySelector.StopPickMode()
-	Highlight.Stop()
+	Highlight.Clear()
 	if IsValid(EntitySelector.Frame) then EntitySelector.Frame:Remove() end
 end
-
--- Re-export highlight functions for backwards compatibility
-EntitySelector.SetHighlight = Highlight.Set
-EntitySelector.AddHighlight = Highlight.Add
-EntitySelector.RemoveHighlight = Highlight.Remove
-EntitySelector.ToggleHighlight = Highlight.Toggle
-EntitySelector.IsHighlighted = Highlight.IsHighlighted
-EntitySelector.StopHighlight = Highlight.Stop
-EntitySelector.ClearHighlight = Highlight.Clear
-EntitySelector.GetHighlightedEntities = Highlight.GetEntities
 
 --------------------------------------------------------------------------------
 -- Sidebar view. Registered like the Explorer; `popout` makes the activity-bar

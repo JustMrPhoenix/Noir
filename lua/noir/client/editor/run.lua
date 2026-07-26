@@ -90,7 +90,26 @@ function Editor.Run.Code(target)
 		end, id)
 	end
 
-	Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, target, id)
+	-- SWEP/SENT: flag the run with the tab's effective entity type so the target realm
+	-- wraps the body in Start/End. Registering needs both realms, so nudge toward Shared.
+	local entType = Editor.Session.GetEntType(Editor.ActiveSession)
+	local runOpts
+	if entType then
+		runOpts = {
+			entType = entType,
+			entClass = Editor.Session.GetEntClass(Editor.ActiveSession),
+			spawn = false
+		}
+
+		if target ~= "shared" then
+			Editor.MonacoPanel:SetStatus(
+				Format("%s tab: run on Shared to register on client + server", entType),
+				Color(200, 150, 0), true
+			)
+		end
+	end
+
+	Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, target, id, runOpts)
 end
 
 function Editor.Run.UpdateCOH()

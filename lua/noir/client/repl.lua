@@ -1,6 +1,21 @@
 ﻿local PANEL = {}
 PANEL.Base = "EditablePanel"
 
+-- Realm/sender colors for the console output prefix, so output reads distinctly
+-- per source: SERVER blue, the local player green, any other client gold.
+local REALM_SERVER = Color(88, 160, 255)
+local REALM_SELF = Color(120, 200, 120)
+local REALM_CLIENT = Color(230, 185, 90)
+
+-- Label + color for the realm that produced a message (`sender` is the run's
+-- responder: Entity(0) for the server, or a player). The local player reads as
+-- "CLIENT" (mirroring "SERVER"); remote players show their name.
+local function realmInfo(sender)
+	if sender == Entity(0) then return "SERVER", REALM_SERVER end
+	if sender == LocalPlayer() then return "CLIENT", REALM_SELF end
+	return sender:Nick(), REALM_CLIENT
+end
+
 -- Ordered fixed targets that Tab cycles through in the REPL input (specific
 -- players remain reachable only via the dropdown).
 local CYCLE_TARGETS = {
@@ -175,6 +190,17 @@ end
 -- Switch the run target and refresh the combobox + autocomplete state. Shared
 -- by the dropdown options and the Tab cycling.
 function PANEL:SetTarget(label, target, icon)
+	-- Every non-self target (server / shared / clients / a specific player) needs the
+	-- server to run Noir. If it doesn't (the net string was never registered), warn
+	-- and fall back to self rather than letting the run fail at send time. Keep the
+	-- persisted preference untouched so the choice restores on a Noir-capable server.
+	local fellBack = false
+	if target ~= "self" and util.NetworkStringToID(Noir.Network.Tag) == 0 then
+		self:SetStatus("Server isn't running Noir - falling back to self", Color(150, 0, 0), true)
+		label, target, icon = "Run on self", "self", "icon16/user.png"
+		fellBack = true
+	end
+
 	self.Target = target
 	self.TargetLabel = label
 	self.TargetIcon = icon
@@ -190,8 +216,8 @@ function PANEL:SetTarget(label, target, icon)
 
 	-- Persist the fixed string targets (self/server/shared/clients) so the choice
 	-- survives restarts. Specific players (Entity targets) are intentionally not
-	-- persisted.
-	if self.Session and isstring(target) then
+	-- persisted, and a fallback-to-self must not clobber the saved preference.
+	if self.Session and isstring(target) and not fellBack then
 		self.Session.target = target
 		Noir.Editor.Storage.QueueSave()
 	end
@@ -408,7 +434,11 @@ function PANEL:JS_OnReady()
 	-- Flush any text that was buffered before the HTML was ready
 	if self.TextBuffer then
 		for _, entry in ipairs(self.TextBuffer) do
-			self:RunJS("replinterface.AddText(\"%s\", %s)", entry.text:JavascriptSafe(), entry.isReplAnswer and "true" or "false")
+			if entry.colored then
+				self:RunColoredJS(entry.colored, entry.isReplAnswer)
+			else
+				self:RunJS("replinterface.AddText(\"%s\", %s)", entry.text:JavascriptSafe(), entry.isReplAnswer and "true" or "false")
+			end
 		end
 
 		self.TextBuffer = nil
@@ -500,21 +530,27 @@ function PANEL:OnMessage(target, replName, sender, transferId, message, messageB
 	end
 
 	if string.find(messageBody, "\n") then messageBody = "\n" .. messageBody end
-	local text
-	if target == "shared" or target == "clients" then
-		local senderName = sender == Entity(0) and "SERVER" or tostring(sender)
-		text = Format("--[[%-13s: %s : %s]] %s", replName, senderName, message, messageBody)
-	else
-		text = Format("--[[%-13s: %s]] %s", replName, message, messageBody)
-	end
 
 	-- The run result of a command typed into this panel is its answer; script
 	-- output (print/Msg) and results relayed from editor runs are plain output.
-	if isRunResult and transferId == self.lastTransfer then
-		self:AppendAnswer(text)
+	local isAnswer = isRunResult and transferId == self.lastTransfer
+
+	-- Always tag output with a colored realm indicator so you can tell which realm
+	-- produced each line: "SELF" for a self run, otherwise SERVER / CLIENT / a
+	-- remote player's name per the sender.
+	local realmName, realmColor
+	if target == "self" then
+		realmName, realmColor = "SELF", REALM_SELF
 	else
-		self:AppendText(text)
+		realmName, realmColor = realmInfo(sender)
 	end
+	local segments = {
+		Format("--[[%-13s: ", replName),
+		realmColor, realmName, false,
+		Format(" : %s]] %s", message, messageBody),
+	}
+
+	if isAnswer then self:AppendColoredAnswer(segments) else self:AppendColored(segments) end
 end
 
 -- isReplAnswer marks `text` as the result of a submitted REPL command so the
@@ -538,6 +574,47 @@ function PANEL:AppendAnswer(text)
 	local isReplAnswer = self.AnswerPending or false
 	self.AnswerPending = false
 	self:AppendText(text, isReplAnswer)
+end
+
+-- Encode a segment list (each item a Color, a string, or false=reset) as the
+-- argument stream for replinterface.AddColoredText, then dispatch. The trailing
+-- boolean is isReplAnswer (frontend pops it) so a colored answer folds like a
+-- plain one. Called only once the HTML is ready.
+function PANEL:RunColoredJS(segments, isReplAnswer)
+	local parts = {}
+	for _, seg in ipairs(segments) do
+		if seg == false then
+			parts[#parts + 1] = "false"
+		elseif IsColor(seg) then
+			parts[#parts + 1] = Format("{r:%d,g:%d,b:%d}", seg.r, seg.g, seg.b)
+		else
+			parts[#parts + 1] = "\"" .. tostring(seg):JavascriptSafe() .. "\""
+		end
+	end
+
+	parts[#parts + 1] = isReplAnswer and "true" or "false"
+	self.HTMLPanel:RunJavascript(Format("replinterface.AddColoredText(%s)", table.concat(parts, ",")))
+end
+
+-- Colored counterpart to AppendText: `segments` is a MsgC-style list (colors
+-- paint following strings, false resets). Buffered until the HTML is ready.
+function PANEL:AppendColored(segments, isReplAnswer)
+	self.HasOutput = true
+	if not self.Ready then
+		self.TextBuffer = self.TextBuffer or {}
+		table.insert(self.TextBuffer, {colored = segments, isReplAnswer = isReplAnswer})
+		return
+	end
+
+	self:RunColoredJS(segments, isReplAnswer)
+end
+
+-- Colored counterpart to AppendAnswer: emits `segments` as the current command's
+-- answer (closing its fold) if one is pending, otherwise as plain output.
+function PANEL:AppendColoredAnswer(segments)
+	local isReplAnswer = self.AnswerPending or false
+	self.AnswerPending = false
+	self:AppendColored(segments, isReplAnswer)
 end
 
 function PANEL:SetupHTML()

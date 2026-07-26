@@ -171,6 +171,69 @@ function Editor.Session.Rename(sessionName, newName)
 	Editor.Storage.QueueSave()
 end
 
+-- Tab icon per effective ent type. Modified state is shown on the close button
+-- (a VSCode-style dot), not the left icon -- so the icon always reflects file type.
+Editor.Session.EntIcons = {
+	SWEP = "icon16/gun.png",
+	SENT = "icon16/brick.png"
+}
+
+-- Parse a "--swep [name]" / "--sent [name]" first-line comment. Returns entType,
+-- className (className nil when the comment gives only the bare type).
+function Editor.Session.ParseEntComment(line)
+	if not isstring(line) then return nil end
+	local kind, name = string.match(line, "^%s*%-%-%s*(%a+)%s*(%S*)")
+	if not kind then return nil end
+	kind = string.lower(kind)
+	if kind == "swep" then return "SWEP", name ~= "" and name or nil end
+	if kind == "sent" then return "SENT", name ~= "" and name or nil end
+	return nil
+end
+
+-- Effective ent type for a session, in priority order: first-line comment ->
+-- manual override (entTypeOverride, "none" = explicitly off) -> file path.
+function Editor.Session.GetEntType(session)
+	if not session or session.sessionType == "console" then return nil end
+	local firstLine = string.match(session.code or "", "^[^\n]*")
+	local commentType = Editor.Session.ParseEntComment(firstLine)
+	if commentType then return commentType end
+	local override = session.entTypeOverride
+	if override == "none" then return nil end
+	if override == "SWEP" or override == "SENT" then return override end
+	if session.file then
+		local full = string.lower(Noir.Utils.GetFilePath(unpack(session.file)))
+		if string.find(full, "weapons/", 1, true) then return "SWEP" end
+		if string.find(full, "entities/", 1, true) then return "SENT" end
+	end
+
+	return nil
+end
+
+-- Class name to register under: comment name -> weapons/<x> or entities/<x> folder
+-- -> file base name -> session name (all sans extension).
+function Editor.Session.GetEntClass(session)
+	if not session then return nil end
+	local firstLine = string.match(session.code or "", "^[^\n]*")
+	local _, commentName = Editor.Session.ParseEntComment(firstLine)
+	if commentName then return commentName end
+	if session.file then
+		local full = string.lower(Noir.Utils.GetFilePath(unpack(session.file)))
+		local seg = string.match(full, "weapons/([%w_]+)") or string.match(full, "entities/([%w_]+)")
+		if seg then return seg end
+		local base = string.StripExtension(string.GetFileFromFilename(session.file[2] or ""))
+		if base ~= "" then return base end
+	end
+
+	return string.StripExtension(session.name or "")
+end
+
+-- Left-hand tab icon: terminal for the console, gun/brick for SWEP/SENT, else page.
+function Editor.Session.IconFor(session)
+	if session.sessionType == "console" then return "icon16/application_xp_terminal.png" end
+	local entType = Editor.Session.GetEntType(session)
+	return (entType and Editor.Session.EntIcons[entType]) or "icon16/page.png"
+end
+
 function Editor.Session.Update(sessionName)
 	local session = Editor.SessionsByName[sessionName]
 	-- Skip icon updates for console tab (always uses terminal icon)
@@ -179,7 +242,7 @@ function Editor.Session.Update(sessionName)
 	if IsValid(session.TabPanel) then
 		session.TabPanel:SetTooltip(session.file and Format("[%s] %s", unpack(session.file)) or session.name)
 		session.TabPanel.label:SetText(sessionName)
-		session.TabPanel.image:SetImage(session.Modified and "icon16/page_red.png" or "icon16/page.png")
+		session.TabPanel.image:SetImage(Editor.Session.IconFor(session))
 	end
 end
 

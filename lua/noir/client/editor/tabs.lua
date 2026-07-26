@@ -64,13 +64,9 @@ function Editor.Tab.Add(session)
 	session.TabPanel = pnl
 	table.insert(Editor.Tab.Panels, pnl)
 	local image = vgui.Create("DImage", pnl)
-	-- Use terminal icon for console tab
-	if isConsole then
-		image:SetImage("icon16/application_xp_terminal.png")
-	else
-		image:SetImage(((session.file and not session.Modified) or session.code == "") and "icon16/page.png" or "icon16/page_red.png")
-	end
-
+	-- File-type icon (terminal / gun / brick / page); modified state is shown on the
+	-- close button as a VSCode-style dot, not here.
+	image:SetImage(Editor.Session.IconFor(session))
 	image:SizeToContents()
 	image:DockMargin(10, 10, -10, 10)
 	image:Dock(LEFT)
@@ -99,12 +95,28 @@ function Editor.Tab.Add(session)
 		end
 	else
 		closeButton.Paint = function(_, w, h)
-			if not pnl.IsActive and not pnl:IsHovered() and not closeButton:IsHovered() and not session.Modified then return end
-			if closeButton:IsHovered() then draw.RoundedBox(3, 0, 0, w, h, Color(90, 90, 90, closeButton:GetAlpha())) end
-			draw.DrawText(
-				closeButton:IsHovered() and "r" or (session.Modified and "n" or "r"),
-				"Marlett", w / 2, 2, Color(255, 255, 255, closeButton:GetAlpha()), TEXT_ALIGN_CENTER
-			)
+			local hovered = pnl:IsHovered() or closeButton:IsHovered()
+			if not pnl.IsActive and not hovered and not session.Modified then return end
+			-- Unsaved and not hovered -> VSCode-style round dot; otherwise the X (with a
+			-- highlight box when the button itself is hovered).
+			if session.Modified and not hovered then
+				local alpha = closeButton:GetAlpha()
+				local r = 4
+				surface.SetDrawColor(255, 255, 255, alpha)
+				draw.NoTexture()
+				local segments = 16
+				local poly = {}
+				for i = 0, segments do
+					local a = math.rad((i / segments) * 360)
+					poly[i + 1] = {x = w / 2 + math.cos(a) * r, y = h / 2 + math.sin(a) * r}
+				end
+
+				surface.DrawPoly(poly)
+			else
+				if closeButton:IsHovered() then draw.RoundedBox(3, 0, 0, w, h, Color(90, 90, 90, closeButton:GetAlpha())) end
+				draw.DrawText("r", "Marlett", w / 2, 2, Color(255, 255, 255, closeButton:GetAlpha()), TEXT_ALIGN_CENTER)
+			end
+
 			return true
 		end
 	end
@@ -144,6 +156,11 @@ function Editor.Tab.Add(session)
 			Editor.Tab.Menu.session = session
 			Editor.Tab.Menu.copyPathOption:SetDisabled(session.file == nil or isConsole)
 			Editor.Tab.Menu.copyRelPathOption:SetDisabled(session.file == nil or isConsole)
+			-- Reflect the current effective entity type on the submenu label.
+			if Editor.Tab.Menu.entTypeParent then
+				Editor.Tab.Menu.entTypeParent:SetDisabled(isConsole)
+				Editor.Tab.Menu.entTypeParent:SetText("Entity Type: " .. (Editor.Session.GetEntType(session) or "None"))
+			end
 			-- Update autorun option
 			if session.file and not isConsole then
 				Editor.Tab.Menu.autorunOption:SetDisabled(false)

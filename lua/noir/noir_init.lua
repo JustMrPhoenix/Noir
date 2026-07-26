@@ -17,6 +17,8 @@ local reload = function(fullReload)
 			if Noir.FileSearch.UI and IsValid(Noir.FileSearch.UI.Frame) then Noir.FileSearch.UI.Frame:Remove() end
 		end
 
+		if Noir.TableSearch then Noir.TableSearch.CancelAll() end
+
 		if Noir.EntitySelector then
 			Noir.EntitySelector.StopPickMode()
 			Noir.EntitySelector.Close()
@@ -106,8 +108,10 @@ function Noir.Load()
 	loadModule("execution.lua")
 	loadModule("output_format.lua")
 	loadModule("search.lua")
+	loadModule("entity_create.lua")
 	loadModule("environment.lua")
 	loadModule("filesearch.lua")
+	loadModule("tablesearch.lua")
 	loadModule("entitysearch.lua")
 	loadModule("client/autocomplete.lua")
 	loadModule("client/skin.lua")
@@ -127,6 +131,7 @@ function Noir.Load()
 	loadModule("client/entity_selector.lua")
 	loadModule("client/dashboard.lua")
 	loadModule("client/filesearch_ui.lua")
+	loadModule("client/search_hud.lua")
 	loadModule("client/autorun.lua")
 	loadModule("ndl/load.lua")
 	NDL.load()

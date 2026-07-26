@@ -1038,16 +1038,25 @@ Utils.UTF8_lc_uc = {
 	["𐑏"] = "𐐧",
 }
 
+-- Matches a single UTF8 codepoint: an ASCII byte, or a lead byte plus its
+-- continuation bytes. Lets us walk a string one character at a time in one gsub.
+local UTF8_CHAR = "[%z\1-\127\194-\244][\128-\191]*"
+
+-- Reverse of UTF8_lc_uc (uppercase -> lowercase), built once. UTF8_lc_uc itself is
+-- the lowercase -> uppercase direction used by UTF8Upper.
+Utils.UTF8_uc_lc = {}
+for l, u in pairs(Utils.UTF8_lc_uc) do
+	Utils.UTF8_uc_lc[u] = l
+end
+
+-- Case-fold in a single pass: gsub matches each character and the lookup table
+-- rewrites the cased ones (characters absent from the table are left untouched,
+-- which is gsub's behaviour for a table replacement that returns nil). This is
+-- O(#str); the old implementation ran one gsub per table entry (~900 per call).
 function Utils.UTF8Lower(str)
-	for l, u in pairs(Utils.UTF8_lc_uc) do
-		str = str:gsub(u, l)
-	end
-	return str
+	return (str:gsub(UTF8_CHAR, Utils.UTF8_uc_lc))
 end
 
 function Utils.UTF8Upper(str)
-	for l, u in pairs(Utils.UTF8_lc_uc) do
-		str = str:gsub(l, u)
-	end
-	return str
+	return (str:gsub(UTF8_CHAR, Utils.UTF8_lc_uc))
 end

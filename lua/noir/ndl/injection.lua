@@ -15,43 +15,6 @@ local function pushTrace(originalFunc, TraceData)
 	if #records > NDL.MaxTraceRecords then table.remove(records, 1) end
 end
 
--- Behaviors a detour func can return as its first value to control the original function.
-NDL.DETOUR_CONTINUE = "DETOUR_CONTINUE" -- Call the original with the untouched arguments (default).
-NDL.DETOUR_STOP = "DETOUR_STOP" -- Do not call the original; the remaining returned values are returned to the caller.
-NDL.DETOUR_PASS = "DETOUR_PASS" -- Call the original with a new argument list (the remaining returned values).
-
--- Detour funcs return a behavior (see NDL.DETOUR_*) as their first value, followed by return
--- values (DETOUR_STOP) or replacement arguments (DETOUR_PASS). For backwards compatibility a
--- returned `true` maps to DETOUR_STOP and `false`/`nil` to DETOUR_CONTINUE.
--- When passOriginal is true the detour func receives the original function as its first argument.
-function NDL.MakeDetour(originalFunc, detourFunc, passOriginal)
-	return function(...)
-		local succ, res
-		if passOriginal then
-			succ, res = NDL.PCall(detourFunc, originalFunc, ...)
-		else
-			succ, res = NDL.PCall(detourFunc, ...)
-		end
-
-		if not succ then
-			NDL.Error("Error executing detour func: ", Color(200, 0, 0), res, "\n")
-			return originalFunc(...)
-		end
-
-		local behavior = table.remove(res, 1)
-
-		if behavior == NDL.DETOUR_STOP then
-			return unpack(res)
-		elseif behavior == NDL.DETOUR_PASS then
-			return originalFunc(unpack(res))
-		elseif behavior == NDL.DETOUR_CONTINUE then
-			return originalFunc(...)
-		else
-			return unpack({behavior, unpack(res)})
-		end
-	end
-end
-
 -- FilterFuncs should return true, the table of arguments to pass to the original function
 function NDL.MakeArgsFilter(originalFunc, filterFunc)
 	return function(...)
@@ -212,10 +175,15 @@ function NDL.WipeTraces()
 	NDL.traces = {}
 end
 
--- When passOriginal is true the detour func receives the original function as its first argument.
-function NDL.Detour(targetTbl, funcName, detourFunc, passOriginal)
+-- C++-detour style: the detour receives the original (the trampoline) as its first argument and
+-- returns whatever the caller should get. Pass through with `return original(...)`; replace by
+-- returning your own values; suppress by returning nothing. An error in the detour propagates to
+-- the caller, so a broken detour fails the call rather than silently falling back to the original.
+function NDL.Detour(targetTbl, funcName, detourFunc)
 	local original = rawget(targetTbl, funcName)
-	NDL.Inject(targetTbl, funcName, NDL.MakeDetour(original, detourFunc, passOriginal))
+	NDL.Inject(targetTbl, funcName, function(...)
+		return detourFunc(original, ...)
+	end)
 end
 
 function NDL.FilterArgs(targetTbl, funcName, filterFunc)
