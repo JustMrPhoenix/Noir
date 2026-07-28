@@ -2,31 +2,48 @@ local Editor = Noir.Editor or {}
 Noir.Editor = Editor
 Editor.UI = Editor.UI or {}
 
--- Fade the frame together with its currently visible content panel when focus is
--- lost. Monaco and the REPL panels are DHTML (chromium) and don't inherit the
--- frame's alpha, so each has to be set explicitly. Dimming Monaco plus the active
--- session's REPL panel covers both tab types -- the inactive one is hidden, so
--- setting its alpha is harmless.
+-- Fade the frame together with its content panels when focus is lost. Monaco and the
+-- REPL panels are DHTML (chromium) and don't inherit the frame's alpha, so each tab
+-- type sets its own via SetAlpha. Applying it to every session (not just the active
+-- one) keeps the shared Monaco panel in sync no matter which tab is active; hidden
+-- panels don't care.
 function Editor.SetFocusAlpha(hasFocus)
 	local a = hasFocus and 255 or 190
 	if IsValid(Editor.Frame) then Editor.Frame:SetAlpha(a) end
-	if IsValid(Editor.MonacoPanel) then Editor.MonacoPanel:SetAlpha(a) end
-	local active = Editor.ActiveSession
-	if active then
-		-- The active tab's DHTML REPL (console) or SQL tab's REPL, whichever it is.
-		if IsValid(active.ReplPanel) then active.ReplPanel:SetAlpha(a) end
-		if IsValid(active.DBPanel) and IsValid(active.DBPanel.ReplPanel) then active.DBPanel.ReplPanel:SetAlpha(a) end
+	for _, session in ipairs(Editor.Sessions) do
+		local def = Editor.TabTypes.Get(session)
+		if def.SetAlpha then def.SetAlpha(session, a) end
 	end
 end
 
--- True once the Monaco editor and every open console REPL panel have finished
--- loading. The loading overlay stays up until this returns true. Console panels are
--- created inside monaco.OnReady, so this naturally waits for Monaco to load first
--- and then for each restored/opened console to catch up.
+-- A content panel's DHTML child (chromium) doesn't inherit the frame's alpha, so route
+-- its focus changes back through SetFocusAlpha. Shared by every DHTML content panel.
+function Editor.WireFocusAlpha(htmlPanel)
+	if not IsValid(htmlPanel) then return end
+	htmlPanel.OnFocusChanged = function(_, hasFocus) Editor.SetFocusAlpha(hasFocus) end
+end
+
+-- Let dragging `panel` move the frame while it isn't maximized (full-bleed content
+-- panels cover the title-bar area). Shared by the Monaco and console panels.
+function Editor.WireFrameDrag(panel)
+	panel.OnMousePressed = function(_, ...)
+		if not Editor.Frame.Maximized then Editor.Frame:OnMousePressed(...) end
+	end
+
+	panel.OnMouseReleased = function(_, ...)
+		if not Editor.Frame.Maximized then Editor.Frame:OnMouseReleased(...) end
+	end
+end
+
+-- True once the Monaco editor and every tab type's content panel have finished
+-- loading. The loading overlay stays up until this returns true. Bespoke panels are
+-- created inside monaco.OnReady, so this naturally waits for Monaco to load first and
+-- then for each restored/opened panel to catch up (via the type's IsReady).
 function Editor.AllPanelsReady()
 	if not (IsValid(Editor.MonacoPanel) and Editor.MonacoPanel.Ready) then return false end
-	for _, console in pairs(Editor.Console.Sessions or {}) do
-		if IsValid(console.ReplPanel) and not console.ReplPanel.Ready then return false end
+	for _, session in ipairs(Editor.Sessions) do
+		local def = Editor.TabTypes.Get(session)
+		if def.IsReady and not def.IsReady(session) then return false end
 	end
 
 	return true
@@ -283,68 +300,33 @@ function Editor.UI.CreateFrame(preload)
 	monaco.ErrorList:DockMargin(0, 0, 14, 0)
 	monaco:SetCursor("sizenwse")
 	-- REPL panels are now created per-console in Editor.Console.CreateTab()
-	monaco.OnMousePressed = function(_, ...)
-		if frame.Maximized then return end
-		frame:OnMousePressed(...)
-	end
-
-	monaco.OnMouseReleased = function(_, ...)
-		if frame.Maximized then return end
-		frame:OnMouseReleased(...)
-	end
-
+	Editor.WireFrameDrag(monaco)
 	monaco.OnReady = function()
-		-- Clear existing tabs and console panels (handles script reload case)
+		-- Clear existing tabs and any bespoke content panels from a previous build
+		-- (script-reload case). Teardown is dispatched through each session's tab type
+		-- (its Destroy removes the panel and clears the type's own tracking), so new tab
+		-- types are cleaned up without adding a branch here. Editor (Monaco) sessions are
+		-- rebuilt by LoadSessions below, so their Destroy is skipped.
 		for _, tab in ipairs(Editor.Tab.Panels or {}) do
 			if IsValid(tab) then tab:Remove() end
 		end
 
 		Editor.Tab.Panels = {}
-		-- Clear console REPL panels
-		for _, console in pairs(Editor.Console.Sessions or {}) do
-			if console.ReplPanel and IsValid(console.ReplPanel) then console.ReplPanel:Remove() end
+		for _, session in ipairs(Editor.Sessions or {}) do
+			local def = Editor.TabTypes.Get(session)
+			if not def.caps.monaco and def.Destroy then def.Destroy(session) end
 		end
 
-		Editor.Console.Sessions = {}
-		Editor.Console.Main = nil
-		-- Clear SQL tab panels (transient; not restored from sessions.json)
-		for _, sqlSession in pairs(Editor.Database and Editor.Database.Sessions or {}) do
-			if IsValid(sqlSession.DBPanel) then sqlSession.DBPanel:Remove() end
-		end
-
-		if Editor.Database then Editor.Database.Sessions = {} end
 		-- Always load sessions fresh from file
 		Editor.Storage.LoadSessions()
 		for _, session in ipairs(Editor.Sessions) do
 			Editor.Tab.Add(session)
-			-- Rebuild the bespoke panel for restored panel sessions (console REPLs and
-			-- SQL tabs). SQL tabs reopen empty -- only their name/target/history persist.
-			if session.sessionType == Editor.SessionType.Console then
-				local replPanel = vgui.Create("NoirReplPanel", frame)
-				replPanel:DockMargin(0, 0, -5, -5)
-				replPanel:Dock(FILL)
-				replPanel:SetVisible(false)
-				replPanel:SetCursor("sizenwse")
-				session.ReplPanel = replPanel
-				replPanel.IsMainConsole = session.isMainConsole or false
-				replPanel.Session = session
-				Editor.Console.ApplySessionLanguage(replPanel, session)
-				replPanel.OnMousePressed = function(_, ...)
-					if frame.Maximized then return end
-					frame:OnMousePressed(...)
-				end
-
-				replPanel.OnMouseReleased = function(_, ...)
-					if frame.Maximized then return end
-					frame:OnMouseReleased(...)
-				end
-
-				replPanel.HTMLPanel.OnFocusChanged = function(_, hasFocus) Editor.SetFocusAlpha(hasFocus) end
-				Editor.Console.Sessions[session.name] = session
-				if session.isMainConsole then Editor.Console.Main = session end
-			elseif session.sessionType == Editor.SessionType.SQL then
-				Editor.Database.BuildPanel(session)
-			end
+			-- Rebuild the bespoke content panel for restored panel sessions (console
+			-- REPLs, SQL tabs, ...) via their tab type's Build. Editor sessions are handed
+			-- to Monaco in a batch through LoadSessions below, so they don't build here.
+			-- SQL tabs reopen empty -- only their name/target/history persist.
+			local def = Editor.TabTypes.Get(session)
+			if not def.caps.monaco and def.Build then def.Build(session, frame) end
 		end
 
 		Editor.IsReady = true
@@ -414,7 +396,7 @@ function Editor.UI.CreateFrame(preload)
 		Editor.Run.UpdateCOH()
 	end
 
-	monaco.HTMLPanel.OnFocusChanged = function(_, hasFocus) Editor.SetFocusAlpha(hasFocus) end
+	Editor.WireFocusAlpha(monaco.HTMLPanel)
 	monaco.OnOpenURL = function(_, url)
 		if Editor.OpenFileURL(url) then return end
 		gui.OpenURL(url)

@@ -75,6 +75,11 @@ function Editor.Storage.QueueSave()
 	Editor.MonacoPanel:GetSessions()
 end
 
+-- Per-session fields that hold live VGUI panels / run channels and must never be
+-- serialized -- each tab type rebuilds them on restore (see the Build loop in
+-- frame.lua). Stripped from the saved copy below.
+local TRANSIENT_SESSION_FIELDS = {"TabPanel", "ReplPanel", "DBPanel", "runTransfers"}
+
 function Editor.Storage.SaveJS(jsSessionsData)
 	local sessions = table.Copy(Editor.Sessions)
 	local sessionsByName = {}
@@ -89,6 +94,12 @@ function Editor.Storage.SaveJS(jsSessionsData)
 			table.Merge(Editor.SessionsByName[v.name], v)
 			session.SavedCode = nil
 			if session.file and not session.Modified then session.code = nil end
+		end
+	end
+
+	for _, v in pairs(sessions) do
+		for _, field in ipairs(TRANSIENT_SESSION_FIELDS) do
+			v[field] = nil
 		end
 	end
 
@@ -251,6 +262,26 @@ function Editor.Storage.AddReplHistory(language, code)
 	local limit = Editor.Storage.GetReplHistoryLimit()
 	while #hist > limit do table.remove(hist) end
 	Editor.Storage.SaveReplHistory()
+end
+
+-- Wipe stored command history. Pass a language to clear just that kind (glua /
+-- javascript / sql); omit it to clear every history. Returns how many entries went.
+function Editor.Storage.ClearReplHistory(language)
+	local removed = 0
+	if language then
+		language = NormalizeReplLang(language)
+		local hist = Editor.ReplHistory[language]
+		removed = hist and #hist or 0
+		Editor.ReplHistory[language] = {}
+	else
+		for lang, hist in pairs(Editor.ReplHistory or {}) do
+			removed = removed + #hist
+			Editor.ReplHistory[lang] = {}
+		end
+	end
+
+	Editor.Storage.SaveReplHistory()
+	return removed
 end
 
 -- Trim every stored history down to the current limit (called when the limit changes).

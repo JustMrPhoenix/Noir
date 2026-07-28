@@ -39,8 +39,8 @@ function PANEL:Init()
 	repl.OnCode = function(_, code) self:RunSQL(code, true) end
 	-- Restore the frame's focus opacity when the REPL DHTML takes focus (otherwise
 	-- clicking into it leaves the whole editor dimmed -- the DHTML doesn't inherit
-	-- the frame's alpha, so SetFocusAlpha has to be told). Mirrors the console wiring.
-	repl.HTMLPanel.OnFocusChanged = function(_, hasFocus) Editor.SetFocusAlpha(hasFocus) end
+	-- the frame's alpha). Mirrors the console wiring.
+	Editor.WireFocusAlpha(repl.HTMLPanel)
 	self.ReplPanel = repl
 	divider:SetTop(repl)
 
@@ -180,12 +180,14 @@ function Editor.Database.SetPanelTarget(panel, target)
 	end
 end
 
--- Build (and track) the NoirDatabaseTab panel for `session`, parented to the frame
--- and hidden until activated. Shared by CreateTab and the session-restore path in
--- frame.lua. `target` overrides the panel's run realm (defaults to session.target).
-function Editor.Database.BuildPanel(session, target)
-	if not Editor.Frame then return end
-	local panel = vgui.Create("NoirDatabaseTab", Editor.Frame)
+-- Build (and track) the NoirDatabaseTab panel for `session`, parented to `parent`
+-- (defaults to the editor frame) and hidden until activated. Driven by the sql tab
+-- type's Build (both live create and session restore). `target` overrides the panel's
+-- run realm (defaults to session.target).
+function Editor.Database.BuildPanel(session, parent, target)
+	parent = parent or Editor.Frame
+	if not IsValid(parent) then return end
+	local panel = vgui.Create("NoirDatabaseTab", parent)
 	panel:DockMargin(0, 0, -5, -5)
 	panel:Dock(FILL)
 	panel:SetVisible(false)
@@ -217,22 +219,16 @@ function Editor.Database.CreateTab(name, target)
 		target = isstring(target) and target or "self"
 	}
 
-	table.insert(Editor.Sessions, session)
-	Editor.SessionsByName[name] = session
-	Editor.Database.Sessions[name] = session
-	Editor.Tab.Add(session)
-	Editor.Database.BuildPanel(session, target)
-	return session
-end
+	-- Tab.Open builds the panel via the sql type's Build (Database.BuildPanel), which
+	-- targets the persisted session.target string.
+	Editor.Tab.Open(session)
+	-- A live Player target can't be persisted (session.target stays "self"), so apply
+	-- it to the freshly built panel directly.
+	if not isstring(target) and IsValid(session.DBPanel) then
+		Editor.Database.SetPanelTarget(session.DBPanel, target)
+	end
 
--- Close an SQL tab: remove its panel, drop tracking, then close the session.
-function Editor.Database.Close(sessionName)
-	local session = Editor.SessionsByName[sessionName]
-	if not session or session.sessionType ~= Editor.SessionType.SQL then return end
-	if IsValid(session.DBPanel) then session.DBPanel:Remove() end
-	session.DBPanel = nil
-	Editor.Database.Sessions[sessionName] = nil
-	Editor.Session.Close(sessionName)
+	return session
 end
 
 -- Create and focus a brand-new SQL tab on `target`. Used by the menu / sidebar
@@ -272,5 +268,36 @@ function Editor.Database.OpenQueryTab(target, query, runNow)
 
 	return session
 end
+
+-- The SQL tab type: a bespoke per-session NoirDatabaseTab (REPL + results table),
+-- none of the editor capabilities. SQL tabs are transient (see persistence.lua).
+Editor.TabTypes.Register(Editor.SessionType.SQL, {
+	caps = {},
+	Icon = function() return "icon16/database.png" end,
+	Build = function(session, parent) Editor.Database.BuildPanel(session, parent, session.target) end,
+	Activate = function(session)
+		if IsValid(session.DBPanel) then
+			session.DBPanel:SetVisible(true)
+			session.DBPanel:RequestFocus()
+		end
+	end,
+	Deactivate = function(session)
+		if IsValid(session.DBPanel) then session.DBPanel:SetVisible(false) end
+	end,
+	Destroy = function(session)
+		if IsValid(session.DBPanel) then session.DBPanel:Remove() end
+		session.DBPanel = nil
+		Editor.Database.Sessions[session.name] = nil
+	end,
+	SetAlpha = function(session, alpha)
+		if IsValid(session.DBPanel) and IsValid(session.DBPanel.ReplPanel) then
+			session.DBPanel.ReplPanel:SetAlpha(alpha)
+		end
+	end,
+	IsReady = function(session)
+		local panel = session.DBPanel
+		return not IsValid(panel) or not IsValid(panel.ReplPanel) or panel.ReplPanel.Ready
+	end
+})
 
 return Editor.Database

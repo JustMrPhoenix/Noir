@@ -15,6 +15,58 @@ Editor.SessionType = {
 	SQL = "sql"
 }
 
+-- Tab-type registry. Each tab kind (editor / console / sql, plus any future type)
+-- registers a def describing what it *is* -- its icon, its capabilities, and its
+-- content-panel lifecycle -- so the rest of the editor never branches on
+-- `sessionType ==`. Modelled on Editor.Sidebar.RegisterView. A def looks like:
+--   Icon       function(session) -> string      -- left tab icon
+--   caps       table   -- booleans (default false); replace every IsPanel/type check:
+--                monaco   content is the shared Monaco panel (multiplexed via SetSession);
+--                         false => a bespoke per-session panel
+--                file     file-backed: Save / Save As / Copy Path / Autorun apply
+--                run      participates in Editor.Run.Code
+--                rename   double-click / menu rename allowed
+--                entType  SWEP/SENT entity-type menu applies
+--                modified close button shows the VSCode "unsaved" dot
+--   Build      function(session, parent)         -- create the per-session panel (both
+--                                                   incremental create and restore);
+--                                                   no-op body for the shared Monaco type
+--   Activate   function(session)                 -- show content + focus
+--   Deactivate function(session)                 -- hide content
+--   Destroy    function(session)                 -- teardown on close
+--   SetAlpha   function(session, alpha)  optional -- fade the focused panel
+--   IsReady    function(session) -> bool optional -- panel-ready gate for the loading overlay
+--   ContextMenu function(menu, session) optional  -- contribute extra tab-context-menu items
+--   CanRunOn   function(target) -> bool  optional -- restrict which run realms are allowed
+--                (only meaningful when caps.run is set). `target` is a realm string
+--                ("self"/"server"/"shared"/"clients") or a specific-client Player.
+--                Absent => every realm is allowed. e.g. a server-only tab returns
+--                `target == "server"`.
+Editor.TabTypes = Editor.TabTypes or {}
+Editor.TabTypes.Registry = Editor.TabTypes.Registry or {}
+function Editor.TabTypes.Register(id, def)
+	def.id = id
+	def.caps = def.caps or {}
+	Editor.TabTypes.Registry[id] = def
+end
+
+-- Can a session run its code on `target`? False for types that don't run at all
+-- (caps.run unset) or that restrict realms via CanRunOn. Used by the run path and to
+-- grey out disallowed realms in the Run menu.
+function Editor.TabTypes.CanRunOn(session, target)
+	local def = Editor.TabTypes.Get(session)
+	if not def.caps.run then return false end
+	if def.CanRunOn then return def.CanRunOn(target) end
+	return true
+end
+
+-- Resolve a session (or a bare type id) to its def. Unknown types fall back to the
+-- editor type, which is the safe legacy default (treat as a Monaco document).
+function Editor.TabTypes.Get(session)
+	local id = istable(session) and (session.sessionType or Editor.SessionType.Editor) or session
+	return Editor.TabTypes.Registry[id] or Editor.TabTypes.Registry[Editor.SessionType.Editor]
+end
+
 function Editor.RegisterActions(panel)
 	panel:AddAction("fileNew", "File: New File", function() Editor.Session.Create() end, "Mod.CtrlCmd | Key.KeyN")
 	panel:AddAction("fileOpen", "File: Open File...", function() Noir.FileBrowser.Open(true) end, "Mod.CtrlCmd | Key.KeyO")
@@ -23,14 +75,7 @@ function Editor.RegisterActions(panel)
 	panel:AddAction("fileSaveAs", "File: Save As...", function() Editor.Session.SaveAs() end, "Mod.CtrlCmd | Mod.Shift | Key.KeyS")
 	panel:AddAction("sessionClose", "Close tab", function()
 		if not Editor.ActiveSession then return end
-		local kind = Editor.ActiveSession.sessionType
-		if kind == Editor.SessionType.Console then
-			Editor.Console.Close(Editor.ActiveSession.name)
-		elseif kind == Editor.SessionType.SQL then
-			Editor.Database.Close(Editor.ActiveSession.name)
-		else
-			Editor.Session.CloseTab(Editor.ActiveSession.name)
-		end
+		Editor.Session.CloseTab(Editor.ActiveSession.name)
 	end, "Mod.CtrlCmd | Key.KeyW")
 
 	panel:AddAction("runOnSelf", "Lua: Run on self", function() Editor.Run.Code("self") end)
@@ -49,6 +94,18 @@ function Editor.RegisterActions(panel)
 	panel:AddAction("replSwitchJS", "Console: Switch to JavaScript", function(p)
 		if p.SwitchLanguage then p:SwitchLanguage("javascript") end
 	end, "Mod.CtrlCmd | Mod.Alt | Key.KeyJ")
+
+	-- REPL-only: wipe the persisted command history for this console's current
+	-- language (Lua / JavaScript / SQL) and refresh the frontend so Up-arrow no
+	-- longer offers the cleared entries. Gated on LoadHistory so it's a no-op on
+	-- the Monaco editor panel.
+	if panel.LoadHistory then
+		panel:AddAction("replClearHistory", "Console: Clear command history", function(p)
+			local removed = Editor.Storage.ClearReplHistory(p.Language)
+			p:LoadHistory()
+			if p.SetStatus then p:SetStatus("Cleared " .. removed .. " history entries", Color(150, 100, 0), true) end
+		end)
+	end
 
 	-- REPL-only: Tab cycles the run target, but only on an empty input line (the
 	-- `replInputEmpty` precondition falls through to Monaco's default Tab otherwise).

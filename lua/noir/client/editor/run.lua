@@ -3,8 +3,14 @@ Noir.Editor = Editor
 Editor.Run = Editor.Run or {}
 
 function Editor.Run.Code(target)
-	-- Panel tabs (console / SQL) don't run through the editor's Monaco run path.
-	if Editor.Session.IsPanel(Editor.ActiveSession) then return end
+	-- Only tab types that opt into running (the editor type) use the Monaco run path;
+	-- console / SQL tabs have their own input handling.
+	if not Editor.ActiveSession or not Editor.TabTypes.Get(Editor.ActiveSession).caps.run then return end
+	-- A tab type may restrict which realms it can run on (e.g. a server-only tab).
+	if not Editor.TabTypes.CanRunOn(Editor.ActiveSession, target) then
+		Editor.MonacoPanel:SetStatus(Format("This tab can't run on '%s'", tostring(target)), Color(200, 150, 0), true)
+		return
+	end
 	Editor.Run.LastTarget = target
 	Editor.Storage.QueueSave()
 	-- JS tabs run in the editor's own DHTML (JS is local-only, so `target` is

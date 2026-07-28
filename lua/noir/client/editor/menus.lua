@@ -93,15 +93,18 @@ function Editor.UI.BuildMenuBar(frame)
 	runMenu:Hide()
 	Noir.Utils.AddMenuOption(runMenu, "Run last target", function() Editor.Run.Code(Editor.Run.LastTarget or "self") end, "icon16/lightning.png", "Ctrl+E")
 	runMenu:AddSpacer():SetTall(5)
-	Noir.Utils.AddMenuOption(runMenu, "Run on self", function() Editor.Run.Code("self") end, "icon16/user.png")
-	Noir.Utils.AddMenuOption(runMenu, "Run on server", function() Editor.Run.Code("server") end, "icon16/server.png")
+	-- Kept in Editor.UI.RunOptions so DoClick can grey out realms a tab type disallows.
+	Editor.UI.RunOptions = {}
+	Editor.UI.RunOptions.self = Noir.Utils.AddMenuOption(runMenu, "Run on self", function() Editor.Run.Code("self") end, "icon16/user.png")
+	Editor.UI.RunOptions.server = Noir.Utils.AddMenuOption(runMenu, "Run on server", function() Editor.Run.Code("server") end, "icon16/server.png")
 	local runOnSubmenu, runOnMenu = runMenu:AddSubMenu("Run on client")
 	runOnMenu:SetIcon("icon16/user_go.png")
 	runOnMenu:SetTextColor(Color(200, 200, 200))
 	runOnSubmenu:SetDeleteSelf(false)
 	Editor.UI.RunOnSubmenu = runOnSubmenu
-	Noir.Utils.AddMenuOption(runMenu, "Run on clients", function() Editor.Run.Code("clients") end, "icon16/group.png")
-	Noir.Utils.AddMenuOption(runMenu, "Run on shared", function() Editor.Run.Code("shared") end, "icon16/world.png")
+	Editor.UI.RunOnClientParent = runOnMenu
+	Editor.UI.RunOptions.clients = Noir.Utils.AddMenuOption(runMenu, "Run on clients", function() Editor.Run.Code("clients") end, "icon16/group.png")
+	Editor.UI.RunOptions.shared = Noir.Utils.AddMenuOption(runMenu, "Run on shared", function() Editor.Run.Code("shared") end, "icon16/world.png")
 	runMenu:AddSpacer():SetTall(10)
 	local autorunSubmenu, autorunMenu = runMenu:AddSubMenu("Autorun")
 	autorunMenu:SetIcon("icon16/control_play_blue.png")
@@ -116,17 +119,31 @@ function Editor.UI.BuildMenuBar(frame)
 		end
 
 		CloseDermaMenus()
+		-- Grey out realms the active tab type can't run on (e.g. a server-only tab).
+		local active = Editor.ActiveSession
+		local function allow(target) return active ~= nil and Editor.TabTypes.CanRunOn(active, target) end
+		Editor.UI.RunOptions.self:SetDisabled(not allow("self"))
+		Editor.UI.RunOptions.server:SetDisabled(not allow("server"))
+		Editor.UI.RunOptions.clients:SetDisabled(not allow("clients"))
+		Editor.UI.RunOptions.shared:SetDisabled(not allow("shared"))
 		for i = 1, runOnSubmenu:ChildCount() do
 			runOnSubmenu:GetChild(i):Remove()
 		end
 
+		local anyClientAllowed = false
 		for _, v in pairs(player.GetHumans()) do
-			Noir.Utils.AddMenuOption(
+			local opt = Noir.Utils.AddMenuOption(
 				runOnSubmenu, v:Nick(),
 				function() Editor.Run.Code(v) end,
 				v:IsSuperAdmin() and "icon16/user_suit.png" or "icon16/user.png"
 			)
+
+			local clientAllowed = allow(v)
+			opt:SetDisabled(not clientAllowed)
+			anyClientAllowed = anyClientAllowed or clientAllowed
 		end
+
+		Editor.UI.RunOnClientParent:SetDisabled(not anyClientAllowed)
 
 		-- Populate autorun submenu
 		for i = 1, autorunSubmenu:ChildCount() do
@@ -206,14 +223,7 @@ function Editor.UI.BuildMenuBar(frame)
 	tabMenu:Hide()
 	Editor.Tab.Menu = tabMenu
 	Noir.Utils.AddMenuOption(tabMenu, "Close", function()
-		local kind = tabMenu.session.sessionType
-		if kind == Editor.SessionType.Console then
-			Editor.Console.Close(tabMenu.session.name)
-		elseif kind == Editor.SessionType.SQL then
-			Editor.Database.Close(tabMenu.session.name)
-		else
-			Editor.Session.CloseTab(tabMenu.session.name)
-		end
+		Editor.Session.CloseTab(tabMenu.session.name)
 	end, "icon16/tab_delete.png")
 
 	Noir.Utils.AddMenuOption(tabMenu, "Close Others", function()

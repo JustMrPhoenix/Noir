@@ -2,35 +2,46 @@ local Editor = Noir.Editor or {}
 Noir.Editor = Editor
 Editor.Tab = Editor.Tab or {}
 
--- Show the content panel for the active session's type: Monaco (editor), a
--- console's REPL panel, or an SQL tab's composite panel. Hide every bespoke
--- per-session panel first, then reveal the active one.
-function Editor.Tab.SetContentPanel(sessionType)
-	for _, console in pairs(Editor.Console.Sessions) do
-		if IsValid(console.ReplPanel) then console.ReplPanel:SetVisible(false) end
+-- Register a session in the model, build its content panel via its tab type, and add
+-- its tab-strip button. The single creation path shared by every tab kind's CreateTab
+-- (Editor.Session.Create, Console.CreateTab, Database.CreateTab). The restore path in
+-- frame.lua doesn't use this -- it rebuilds tabs/panels directly (editor sessions batch
+-- through monaco:LoadSessions).
+function Editor.Tab.Open(session)
+	table.insert(Editor.Sessions, session)
+	Editor.SessionsByName[session.name] = session
+	local def = Editor.TabTypes.Get(session)
+	if def.Build then def.Build(session, Editor.Frame) end
+	Editor.Tab.Add(session)
+	Editor.Storage.QueueSave()
+	return session
+end
+
+-- Show the active session's content panel and hide every other session's. Dispatches
+-- to each tab type's Activate/Deactivate, so any registered type slots in without a
+-- special case here. Deactivating all non-active sessions (rather than tracking the
+-- previous one) keeps things robust on the first activation and after a tab is closed.
+-- `noJS` is passed through to Activate (the editor type skips a redundant Monaco
+-- SetSession on restore).
+function Editor.Tab.SetContentPanel(session, noJS)
+	local def = Editor.TabTypes.Get(session)
+	for _, s in ipairs(Editor.Sessions) do
+		if s ~= session then
+			local d = Editor.TabTypes.Get(s)
+			if d.Deactivate then d.Deactivate(s) end
+		end
 	end
 
-	for _, sqlSession in pairs(Editor.Database and Editor.Database.Sessions or {}) do
-		if IsValid(sqlSession.DBPanel) then sqlSession.DBPanel:SetVisible(false) end
+	-- The editor type's Monaco panel is a single shared instance, visible by default.
+	-- When the active tab is a bespoke panel, hide Monaco explicitly -- the loop above
+	-- only covers it if some editor session happens to still be open (it isn't, e.g.
+	-- right after the last editor tab is closed next to a console/SQL tab).
+	if not def.caps.monaco then
+		local editorDef = Editor.TabTypes.Get(Editor.SessionType.Editor)
+		if editorDef.Deactivate then editorDef.Deactivate() end
 	end
 
-	local active = Editor.ActiveSession
-	if sessionType == Editor.SessionType.Console then
-		Editor.MonacoPanel:SetVisible(false)
-		if active and IsValid(active.ReplPanel) then
-			active.ReplPanel:SetVisible(true)
-			active.ReplPanel:RequestFocus()
-		end
-	elseif sessionType == Editor.SessionType.SQL then
-		Editor.MonacoPanel:SetVisible(false)
-		if active and IsValid(active.DBPanel) then
-			active.DBPanel:SetVisible(true)
-			active.DBPanel:RequestFocus()
-		end
-	else
-		Editor.MonacoPanel:SetVisible(true)
-		Editor.MonacoPanel:RequestFocus()
-	end
+	if def.Activate then def.Activate(session, noJS) end
 end
 
 function Editor.Tab.Cycle(direction)
@@ -64,11 +75,8 @@ function Editor.Tab.BumpScrollIndicator()
 end
 
 function Editor.Tab.Add(session)
-	local isConsole = session.sessionType == Editor.SessionType.Console
-	local isSql = session.sessionType == Editor.SessionType.SQL
-	-- Bespoke per-session panels (console REPL / SQL tab) share behaviour: no file,
-	-- no modified indicator, no rename/entity-type/autorun context options.
-	local isPanel = isConsole or isSql
+	local def = Editor.TabTypes.Get(session)
+	local caps = def.caps
 	local pnl = vgui.Create("DPanel")
 	pnl:SetSkin("Noir")
 	pnl:SetSize(135, 36)
@@ -94,12 +102,12 @@ function Editor.Tab.Add(session)
 	pnl.closeButton = closeButton
 	closeButton:Dock(RIGHT)
 	closeButton:SetText("")
-	closeButton:SetTooltip(isConsole and "Hide" or "Close")
+	closeButton:SetTooltip(def.closeTooltip or "Close")
 	closeButton:SetSize(14, 14)
 	closeButton:DockMargin(0, 10, 5, 10)
 	closeButton.BackgroundColor = Color(0, 0, 0, 0)
-	if isPanel then
-		-- Panel tab: no modified indicator, always show X on hover
+	if not caps.modified then
+		-- No modified indicator (bespoke panel tabs): always show X on hover
 		closeButton.Paint = function(_, w, h)
 			if not pnl.IsActive and not pnl:IsHovered() and not closeButton:IsHovered() then return end
 			if closeButton:IsHovered() then draw.RoundedBox(3, 0, 0, w, h, Color(90, 90, 90, closeButton:GetAlpha())) end
@@ -134,22 +142,13 @@ function Editor.Tab.Add(session)
 		end
 	end
 
-	closeButton.DoClick = function()
-		if isConsole then
-			Editor.Console.Close(session.name)
-		elseif isSql then
-			Editor.Database.Close(session.name)
-		else
-			Editor.Session.CloseTab(session.name)
-		end
-	end
-
+	closeButton.DoClick = function() Editor.Session.CloseTab(session.name) end
 	local oOnMousePressed = pnl.OnMousePressed
 	pnl.OnMousePressed = function(_, keyCode)
 		if keyCode == MOUSE_LEFT then
 			Editor.Tab.SetActive(session.name)
-			-- Disable double-click rename for bespoke panel tabs (console / SQL)
-			if not isPanel and pnl.LastLeftClick and (CurTime() - pnl.LastLeftClick) < 0.5 then
+			-- Double-click rename, only for types that allow it (rename cap).
+			if caps.rename and pnl.LastLeftClick and (CurTime() - pnl.LastLeftClick) < 0.5 then
 				Derma_StringRequest("Rename", "Enter a new name", session.name, function(newName)
 					if Editor.SessionsByName[newName] then
 						Derma_Message("Error", "Cant rename to `" .. newName .. "`, name already taken", "Ok"):SetSkin("Noir")
@@ -169,15 +168,15 @@ function Editor.Tab.Add(session)
 			end
 
 			Editor.Tab.Menu.session = session
-			Editor.Tab.Menu.copyPathOption:SetDisabled(session.file == nil or isPanel)
-			Editor.Tab.Menu.copyRelPathOption:SetDisabled(session.file == nil or isPanel)
+			Editor.Tab.Menu.copyPathOption:SetDisabled(session.file == nil or not caps.file)
+			Editor.Tab.Menu.copyRelPathOption:SetDisabled(session.file == nil or not caps.file)
 			-- Reflect the current effective entity type on the submenu label.
 			if Editor.Tab.Menu.entTypeParent then
-				Editor.Tab.Menu.entTypeParent:SetDisabled(isPanel)
+				Editor.Tab.Menu.entTypeParent:SetDisabled(not caps.entType)
 				Editor.Tab.Menu.entTypeParent:SetText("Entity Type: " .. (Editor.Session.GetEntType(session) or "None"))
 			end
 			-- Update autorun option
-			if session.file and not isPanel then
+			if session.file and caps.file then
 				Editor.Tab.Menu.autorunOption:SetDisabled(false)
 				local isAutorun = Noir.Autorun.IsAutorun(session.file[1], session.file[2])
 				Editor.Tab.Menu.autorunOption:SetText(isAutorun and "Remove from Autorun" or "Add to Autorun")
@@ -187,15 +186,28 @@ function Editor.Tab.Add(session)
 				Editor.Tab.Menu.autorunOption:SetText("Add to Autorun")
 			end
 
-			Editor.Tab.Menu:Open(gui.MouseX(), gui.MouseY(), false, pnl)
-		elseif keyCode == MOUSE_MIDDLE then
-			if isConsole then
-				Editor.Console.Close(session.name)
-			elseif isSql then
-				Editor.Database.Close(session.name)
-			else
-				Editor.Session.CloseTab(session.name)
+			-- Let the session's tab type contribute extra items (optional). Drop any
+			-- from a previous open so they don't stack on the shared menu; new options
+			-- are appended, so they sit below the built-in ones.
+			local menu = Editor.Tab.Menu
+			for _, opt in ipairs(menu.TypeOptions or {}) do
+				if IsValid(opt) then opt:Remove() end
 			end
+
+			menu.TypeOptions = {}
+			if def.ContextMenu then
+				local canvas = menu.GetCanvas and menu:GetCanvas() or menu
+				local before = {}
+				for _, c in ipairs(canvas:GetChildren()) do before[c] = true end
+				def.ContextMenu(menu, session)
+				for _, c in ipairs(canvas:GetChildren()) do
+					if not before[c] then table.insert(menu.TypeOptions, c) end
+				end
+			end
+
+			menu:Open(gui.MouseX(), gui.MouseY(), false, pnl)
+		elseif keyCode == MOUSE_MIDDLE then
+			Editor.Session.CloseTab(session.name)
 		end
 
 		oOnMousePressed(pnl, keyCode)
@@ -219,15 +231,13 @@ end
 function Editor.Tab.SetActive(sessionName, noJS)
 	if not Editor.SessionsByName[sessionName] then return end
 	local session = Editor.SessionsByName[sessionName]
-	local sessionType = session.sessionType or Editor.SessionType.Editor
 	-- Mark old tab as inactive
 	if Editor.ActiveSession and IsValid(Editor.ActiveSession.TabPanel) then Editor.ActiveSession.TabPanel.IsActive = false end
 	-- Update active session
 	Editor.ActiveSession = session
-	-- Switch between Monaco and REPL panels
-	Editor.Tab.SetContentPanel(sessionType)
-	-- Only interact with Monaco for editor sessions
-	if sessionType == Editor.SessionType.Editor and not noJS then Editor.MonacoPanel:SetSession(sessionName) end
+	-- Swap the visible content panel to this session's (per its tab type). For editor
+	-- sessions this also drives Monaco's SetSession (skipped when noJS).
+	Editor.Tab.SetContentPanel(session, noJS)
 	-- Mark new tab as active and scroll to it
 	if Editor.ActiveSession.TabPanel then
 		Editor.ActiveSession.TabPanel.IsActive = true

@@ -2,12 +2,12 @@ local Editor = Noir.Editor or {}
 Noir.Editor = Editor
 Editor.Session = Editor.Session or {}
 
--- Sessions whose content is a bespoke per-session panel (console REPL / SQL tab),
--- not a Monaco document. They can't be saved or renamed as files, carry no entity
--- type, and their teardown removes the panel instead of a Monaco model.
-Editor.Session.PanelTypes = {[Editor.SessionType.Console] = true, [Editor.SessionType.SQL] = true}
+-- A session is a "panel" session (console REPL / SQL tab / any future bespoke type)
+-- when its tab type isn't the shared Monaco document -- i.e. it owns a per-session
+-- panel, can't be saved/renamed as a file, and carries no entity type. Derived from
+-- the tab-type registry's `monaco` capability so new types slot in for free.
 function Editor.Session.IsPanel(session)
-	return session ~= nil and Editor.Session.PanelTypes[session.sessionType] ~= nil
+	return session ~= nil and not Editor.TabTypes.Get(session).caps.monaco
 end
 
 -- Move a file to the front of the recent-files history (dedup, cap at 10) and
@@ -72,12 +72,9 @@ function Editor.Session.Create(sessionName, code, fileData, sessionData)
 	}
 
 	session = table.Merge(sessionData or {}, session)
-	Editor.MonacoPanel:CreateSession(session)
-	table.insert(Editor.Sessions, session)
-	Editor.SessionsByName[sessionName] = session
-	Editor.Tab.Add(session)
-	Editor.Storage.QueueSave()
-	return session
+	-- No sessionType => the default editor (Monaco) type; Tab.Open builds its content
+	-- panel via the type's Build (MonacoPanel:CreateSession for editors).
+	return Editor.Tab.Open(session)
 end
 
 -- Reopen the most recently closed file (VS Code's Ctrl+Shift+T). Reuses the
@@ -130,25 +127,11 @@ function Editor.Session.Close(sessionName, nextActive, noSave)
 		Editor.Tab.SetActive(Editor.Sessions[#Editor.Sessions < idx and #Editor.Sessions or idx].name)
 	end
 
-	if not Editor.Session.IsPanel(session) then
-		-- When the newly active tab is a panel tab (console / SQL), SetActive left
-		-- Monaco pointing at the session we're closing. Hand the frontend another
-		-- editor session to switch to (it fabricates an "Unnamed" document otherwise)
-		-- and flag the resulting OnSessionSet so it doesn't steal the active tab.
-		local switchTo
-		if Editor.Session.IsPanel(Editor.ActiveSession) then
-			for _, v in ipairs(Editor.Sessions) do
-				if not Editor.Session.IsPanel(v) then
-					switchTo = v.name
-					break
-				end
-			end
-
-			Editor.Tab.SuppressActivate = switchTo
-		end
-
-		Editor.MonacoPanel:CloseSession(sessionName, switchTo)
-	end
+	-- Type-specific teardown: bespoke panels remove themselves, the editor type hands
+	-- Monaco a fallback session. Runs after SetActive so the "newly active tab is a
+	-- panel" fallback sees the correct active session.
+	local def = Editor.TabTypes.Get(session)
+	if def.Destroy then def.Destroy(session) end
 	if noSave then return end
 	Editor.Storage.QueueSave()
 end
@@ -235,19 +218,14 @@ function Editor.Session.GetEntClass(session)
 	return string.StripExtension(session.name or "")
 end
 
--- Left-hand tab icon: terminal for the console, database for an SQL tab, gun/brick
--- for SWEP/SENT, else page.
+-- Left-hand tab icon, delegated to the session's tab type (terminal for a console,
+-- database for an SQL tab, gun/brick/page for the editor type by ent type).
 function Editor.Session.IconFor(session)
-	if session.sessionType == Editor.SessionType.Console then return "icon16/application_xp_terminal.png" end
-	if session.sessionType == Editor.SessionType.SQL then return "icon16/database.png" end
-	local entType = Editor.Session.GetEntType(session)
-	return (entType and Editor.Session.EntIcons[entType]) or "icon16/page.png"
+	return Editor.TabTypes.Get(session).Icon(session)
 end
 
 function Editor.Session.Update(sessionName)
 	local session = Editor.SessionsByName[sessionName]
-	-- Skip icon updates for console tab (always uses terminal icon)
-	if session.sessionType == Editor.SessionType.Console then return end
 	-- Used to update code here with latest in file but it breaks if switching tabs fast
 	if IsValid(session.TabPanel) then
 		session.TabPanel:SetTooltip(session.file and Format("[%s] %s", unpack(session.file)) or session.name)
@@ -412,3 +390,49 @@ function Editor.Session.Save(sessionName, callback)
 		Editor.Session.SaveAs(sessionName, callback)
 	end
 end
+
+-- The editor (Monaco document) tab type -- the default/fallback. Unlike the bespoke
+-- panel types, all editor sessions share a single Monaco panel multiplexed by
+-- SetSession, so Build/Activate/Deactivate/SetAlpha all operate on Editor.MonacoPanel.
+Editor.TabTypes.Register(Editor.SessionType.Editor, {
+	caps = {monaco = true, file = true, run = true, rename = true, entType = true, modified = true},
+	Icon = function(session)
+		local entType = Editor.Session.GetEntType(session)
+		return (entType and Editor.Session.EntIcons[entType]) or "icon16/page.png"
+	end,
+	-- Incremental create only; the restore path batches editor sessions through
+	-- monaco:LoadSessions instead (see frame.lua), so Build isn't called then.
+	Build = function(session) Editor.MonacoPanel:CreateSession(session) end,
+	Activate = function(session, noJS)
+		Editor.MonacoPanel:SetVisible(true)
+		-- noJS: Monaco already has this session (LoadSessions on restore), so skip the
+		-- redundant SetSession that would otherwise round-trip through OnSessionSet.
+		if not noJS then Editor.MonacoPanel:SetSession(session.name) end
+		Editor.MonacoPanel:RequestFocus()
+	end,
+	Deactivate = function()
+		if IsValid(Editor.MonacoPanel) then Editor.MonacoPanel:SetVisible(false) end
+	end,
+	SetAlpha = function(_, alpha)
+		if IsValid(Editor.MonacoPanel) then Editor.MonacoPanel:SetAlpha(alpha) end
+	end,
+	Destroy = function(session)
+		-- When the newly active tab is a panel tab (console / SQL), SetActive left
+		-- Monaco pointing at the session we're closing. Hand the frontend another
+		-- editor session (it fabricates an "Unnamed" document otherwise) and flag the
+		-- resulting OnSessionSet so it doesn't steal the active tab.
+		local switchTo
+		if Editor.Session.IsPanel(Editor.ActiveSession) then
+			for _, v in ipairs(Editor.Sessions) do
+				if not Editor.Session.IsPanel(v) then
+					switchTo = v.name
+					break
+				end
+			end
+
+			Editor.Tab.SuppressActivate = switchTo
+		end
+
+		Editor.MonacoPanel:CloseSession(session.name, switchTo)
+	end
+})

@@ -5,6 +5,29 @@ Editor.Console.Sessions = {} -- Track all console sessions
 Editor.Console.Main = nil -- The main console that receives all script output
 Editor.Console.Counter = 0 -- Counter for naming new consoles
 
+-- Build (and track) the NoirReplPanel for `session`, parented to the frame and hidden
+-- until activated. Shared by CreateTab and the session-restore path (via the console
+-- tab type's Build), so both apply the persisted language + run target identically.
+function Editor.Console.BuildPanel(session, parent)
+	parent = parent or Editor.Frame
+	if not IsValid(parent) then return end
+	local replPanel = vgui.Create("NoirReplPanel", parent)
+	replPanel:DockMargin(0, 0, -5, -5)
+	replPanel:Dock(FILL)
+	replPanel:SetVisible(false)
+	replPanel:SetCursor("sizenwse")
+	session.ReplPanel = replPanel
+	replPanel.IsMainConsole = session.isMainConsole or false
+	replPanel.Session = session
+	Editor.Console.ApplySessionLanguage(replPanel, session)
+	Editor.Console.ApplySessionTarget(replPanel, session)
+	Editor.WireFrameDrag(replPanel)
+	Editor.WireFocusAlpha(replPanel.HTMLPanel)
+	Editor.Console.Sessions[session.name] = session
+	if session.isMainConsole then Editor.Console.Main = session end
+	return replPanel
+end
+
 -- Create a new console tab
 function Editor.Console.CreateTab(consoleName, isMain)
 	if not consoleName then
@@ -30,37 +53,8 @@ function Editor.Console.CreateTab(consoleName, isMain)
 		isMainConsole = isMain or false
 	}
 
-	table.insert(Editor.Sessions, session)
-	Editor.SessionsByName[consoleName] = session
-	Editor.Console.Sessions[consoleName] = session
-	Editor.Tab.Add(session)
-	-- Create REPL panel for this console
-	if Editor.Frame then
-		local replPanel = vgui.Create("NoirReplPanel", Editor.Frame)
-		replPanel:DockMargin(0, 0, -5, -5)
-		replPanel:Dock(FILL)
-		replPanel:SetVisible(false)
-		replPanel:SetCursor("sizenwse")
-		session.ReplPanel = replPanel
-		replPanel.IsMainConsole = isMain or false
-		replPanel.Session = session
-		Editor.Console.ApplySessionLanguage(replPanel, session)
-		Editor.Console.ApplySessionTarget(replPanel, session)
-		replPanel.OnMousePressed = function(_, ...)
-			if Editor.Frame.Maximized then return end
-			Editor.Frame:OnMousePressed(...)
-		end
-
-		replPanel.OnMouseReleased = function(_, ...)
-			if Editor.Frame.Maximized then return end
-			Editor.Frame:OnMouseReleased(...)
-		end
-
-		replPanel.HTMLPanel.OnFocusChanged = function(_, hasFocus) Editor.SetFocusAlpha(hasFocus) end
-	end
-
-	if isMain then Editor.Console.Main = session end
-	return session
+	-- Tab.Open builds the REPL panel via the console type's Build (Console.BuildPanel).
+	return Editor.Tab.Open(session)
 end
 
 -- Restore a console's persisted (non-Lua) language onto its REPL panel. Deferred
@@ -134,24 +128,6 @@ function Editor.Console.Show(consoleName)
 	end
 end
 
--- Close a console tab
-function Editor.Console.Close(consoleName)
-	local session = Editor.SessionsByName[consoleName]
-	if not session or session.sessionType ~= Editor.SessionType.Console then return end
-	-- Remove REPL panel
-	if session.ReplPanel then
-		session.ReplPanel:Remove()
-		session.ReplPanel = nil
-	end
-
-	-- Remove from console sessions tracking
-	Editor.Console.Sessions[consoleName] = nil
-	-- If this was the main console, clear the reference
-	if Editor.Console.Main == session then Editor.Console.Main = nil end
-	-- Close the session
-	Editor.Session.Close(consoleName)
-end
-
 -- Toggle main console tab visibility
 function Editor.Console.Toggle()
 	if Editor.ActiveSession and Editor.ActiveSession.sessionType == Editor.SessionType.Console then
@@ -208,3 +184,33 @@ end
 
 -- Public wrapper: external callers (repl.lua) use Noir.Editor.ShowMainConsole.
 function Editor.ShowMainConsole() return Editor.Console.ShowMain() end
+
+-- The console (REPL) tab type: a bespoke per-session NoirReplPanel, none of the
+-- editor capabilities. Its close button reads "Hide" for parity with the old UI.
+Editor.TabTypes.Register(Editor.SessionType.Console, {
+	closeTooltip = "Hide",
+	caps = {},
+	Icon = function() return "icon16/application_xp_terminal.png" end,
+	Build = function(session, parent) Editor.Console.BuildPanel(session, parent) end,
+	Activate = function(session)
+		if IsValid(session.ReplPanel) then
+			session.ReplPanel:SetVisible(true)
+			session.ReplPanel:RequestFocus()
+		end
+	end,
+	Deactivate = function(session)
+		if IsValid(session.ReplPanel) then session.ReplPanel:SetVisible(false) end
+	end,
+	Destroy = function(session)
+		if IsValid(session.ReplPanel) then session.ReplPanel:Remove() end
+		session.ReplPanel = nil
+		Editor.Console.Sessions[session.name] = nil
+		if Editor.Console.Main == session then Editor.Console.Main = nil end
+	end,
+	SetAlpha = function(session, alpha)
+		if IsValid(session.ReplPanel) then session.ReplPanel:SetAlpha(alpha) end
+	end,
+	IsReady = function(session)
+		return not IsValid(session.ReplPanel) or session.ReplPanel.Ready
+	end
+})
