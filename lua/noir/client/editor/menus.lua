@@ -35,6 +35,7 @@ function Editor.UI.BuildMenuBar(frame)
 	fileMenu:SetDrawColumn(true)
 	fileMenu:Hide()
 	Noir.Utils.AddMenuOption(fileMenu, "New", function() Editor.Session.Create() end, "icon16/page_add.png", "Ctrl+N")
+	Noir.Utils.AddMenuOption(fileMenu, "New SQL Tab", function() Editor.Database.NewTab("self") end, "icon16/database.png")
 	fileMenu:AddSpacer():SetTall(10)
 	Noir.Utils.AddMenuOption(fileMenu, "Open", function() Noir.FileBrowser.Open(true) end, "icon16/folder.png", "Ctrl+O")
 	local recentSubmenu, recentMenu = fileMenu:AddSubMenu("Open Recent")
@@ -205,8 +206,11 @@ function Editor.UI.BuildMenuBar(frame)
 	tabMenu:Hide()
 	Editor.Tab.Menu = tabMenu
 	Noir.Utils.AddMenuOption(tabMenu, "Close", function()
-		if tabMenu.session.sessionType == "console" then
+		local kind = tabMenu.session.sessionType
+		if kind == Editor.SessionType.Console then
 			Editor.Console.Close(tabMenu.session.name)
+		elseif kind == Editor.SessionType.SQL then
+			Editor.Database.Close(tabMenu.session.name)
 		else
 			Editor.Session.CloseTab(tabMenu.session.name)
 		end
@@ -214,8 +218,8 @@ function Editor.UI.BuildMenuBar(frame)
 
 	Noir.Utils.AddMenuOption(tabMenu, "Close Others", function()
 		for name, v in pairs(Editor.SessionsByName) do
-			-- Skip console tab and current session
-			if v ~= tabMenu.session and v.sessionType ~= "console" then Editor.Session.CloseTab(name, tabMenu.session.name, true) end
+			-- Skip panel tabs (console / SQL) and the current session
+			if v ~= tabMenu.session and not Editor.Session.IsPanel(v) then Editor.Session.CloseTab(name, tabMenu.session.name, true) end
 		end
 
 		Editor.Storage.QueueSave()
@@ -224,8 +228,8 @@ function Editor.UI.BuildMenuBar(frame)
 	Noir.Utils.AddMenuOption(tabMenu, "Close to the right", function()
 		local idx = table.KeyFromValue(Editor.Sessions, tabMenu.session)
 		for i = #Editor.Sessions, idx + 1, -1 do
-			-- Skip console tab
-			if Editor.Sessions[i].sessionType ~= "console" then Editor.Session.CloseTab(Editor.Sessions[i].name, tabMenu.session.name, true) end
+			-- Skip panel tabs (console / SQL)
+			if not Editor.Session.IsPanel(Editor.Sessions[i]) then Editor.Session.CloseTab(Editor.Sessions[i].name, tabMenu.session.name, true) end
 		end
 
 		Editor.Storage.QueueSave()
@@ -233,8 +237,8 @@ function Editor.UI.BuildMenuBar(frame)
 
 	Noir.Utils.AddMenuOption(tabMenu, "Close Saved", function()
 		for _, v in pairs(Editor.Sessions) do
-			-- Skip console tab
-			if not v.Modified and v.sessionType ~= "console" then Editor.Session.Close(v.name, tabMenu.session.name, true) end
+			-- Skip panel tabs (console / SQL)
+			if not v.Modified and not Editor.Session.IsPanel(v) then Editor.Session.Close(v.name, tabMenu.session.name, true) end
 		end
 
 		Editor.Storage.QueueSave()
@@ -243,8 +247,8 @@ function Editor.UI.BuildMenuBar(frame)
 	Noir.Utils.AddMenuOption(tabMenu, "Close All", function()
 		local sessions = table.Copy(Editor.Sessions)
 		for _, v in pairs(sessions) do
-			-- Skip console tab
-			if v.sessionType ~= "console" then Editor.Session.CloseTab(v.name, nil, true) end
+			-- Skip panel tabs (console / SQL)
+			if not Editor.Session.IsPanel(v) then Editor.Session.CloseTab(v.name, nil, true) end
 		end
 
 		Editor.Storage.QueueSave()

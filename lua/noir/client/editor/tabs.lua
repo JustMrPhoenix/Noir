@@ -2,23 +2,32 @@ local Editor = Noir.Editor or {}
 Noir.Editor = Editor
 Editor.Tab = Editor.Tab or {}
 
--- Toggle between Monaco editor and REPL panel based on session type
+-- Show the content panel for the active session's type: Monaco (editor), a
+-- console's REPL panel, or an SQL tab's composite panel. Hide every bespoke
+-- per-session panel first, then reveal the active one.
 function Editor.Tab.SetContentPanel(sessionType)
-	local isConsole = sessionType == "console"
-	-- Hide all console panels first
 	for _, console in pairs(Editor.Console.Sessions) do
-		if console.ReplPanel then console.ReplPanel:SetVisible(false) end
+		if IsValid(console.ReplPanel) then console.ReplPanel:SetVisible(false) end
 	end
 
-	if isConsole then
-		-- Show the appropriate console's REPL panel
+	for _, sqlSession in pairs(Editor.Database and Editor.Database.Sessions or {}) do
+		if IsValid(sqlSession.DBPanel) then sqlSession.DBPanel:SetVisible(false) end
+	end
+
+	local active = Editor.ActiveSession
+	if sessionType == Editor.SessionType.Console then
 		Editor.MonacoPanel:SetVisible(false)
-		if Editor.ActiveSession and Editor.ActiveSession.ReplPanel then
-			Editor.ActiveSession.ReplPanel:SetVisible(true)
-			Editor.ActiveSession.ReplPanel:RequestFocus()
+		if active and IsValid(active.ReplPanel) then
+			active.ReplPanel:SetVisible(true)
+			active.ReplPanel:RequestFocus()
+		end
+	elseif sessionType == Editor.SessionType.SQL then
+		Editor.MonacoPanel:SetVisible(false)
+		if active and IsValid(active.DBPanel) then
+			active.DBPanel:SetVisible(true)
+			active.DBPanel:RequestFocus()
 		end
 	else
-		-- Show Monaco editor
 		Editor.MonacoPanel:SetVisible(true)
 		Editor.MonacoPanel:RequestFocus()
 	end
@@ -55,7 +64,11 @@ function Editor.Tab.BumpScrollIndicator()
 end
 
 function Editor.Tab.Add(session)
-	local isConsole = session.sessionType == "console"
+	local isConsole = session.sessionType == Editor.SessionType.Console
+	local isSql = session.sessionType == Editor.SessionType.SQL
+	-- Bespoke per-session panels (console REPL / SQL tab) share behaviour: no file,
+	-- no modified indicator, no rename/entity-type/autorun context options.
+	local isPanel = isConsole or isSql
 	local pnl = vgui.Create("DPanel")
 	pnl:SetSkin("Noir")
 	pnl:SetSize(135, 36)
@@ -85,8 +98,8 @@ function Editor.Tab.Add(session)
 	closeButton:SetSize(14, 14)
 	closeButton:DockMargin(0, 10, 5, 10)
 	closeButton.BackgroundColor = Color(0, 0, 0, 0)
-	if isConsole then
-		-- Console tab: no modified indicator, always show X on hover
+	if isPanel then
+		-- Panel tab: no modified indicator, always show X on hover
 		closeButton.Paint = function(_, w, h)
 			if not pnl.IsActive and not pnl:IsHovered() and not closeButton:IsHovered() then return end
 			if closeButton:IsHovered() then draw.RoundedBox(3, 0, 0, w, h, Color(90, 90, 90, closeButton:GetAlpha())) end
@@ -124,6 +137,8 @@ function Editor.Tab.Add(session)
 	closeButton.DoClick = function()
 		if isConsole then
 			Editor.Console.Close(session.name)
+		elseif isSql then
+			Editor.Database.Close(session.name)
 		else
 			Editor.Session.CloseTab(session.name)
 		end
@@ -133,8 +148,8 @@ function Editor.Tab.Add(session)
 	pnl.OnMousePressed = function(_, keyCode)
 		if keyCode == MOUSE_LEFT then
 			Editor.Tab.SetActive(session.name)
-			-- Disable double-click rename for console tab
-			if not isConsole and pnl.LastLeftClick and (CurTime() - pnl.LastLeftClick) < 0.5 then
+			-- Disable double-click rename for bespoke panel tabs (console / SQL)
+			if not isPanel and pnl.LastLeftClick and (CurTime() - pnl.LastLeftClick) < 0.5 then
 				Derma_StringRequest("Rename", "Enter a new name", session.name, function(newName)
 					if Editor.SessionsByName[newName] then
 						Derma_Message("Error", "Cant rename to `" .. newName .. "`, name already taken", "Ok"):SetSkin("Noir")
@@ -154,15 +169,15 @@ function Editor.Tab.Add(session)
 			end
 
 			Editor.Tab.Menu.session = session
-			Editor.Tab.Menu.copyPathOption:SetDisabled(session.file == nil or isConsole)
-			Editor.Tab.Menu.copyRelPathOption:SetDisabled(session.file == nil or isConsole)
+			Editor.Tab.Menu.copyPathOption:SetDisabled(session.file == nil or isPanel)
+			Editor.Tab.Menu.copyRelPathOption:SetDisabled(session.file == nil or isPanel)
 			-- Reflect the current effective entity type on the submenu label.
 			if Editor.Tab.Menu.entTypeParent then
-				Editor.Tab.Menu.entTypeParent:SetDisabled(isConsole)
+				Editor.Tab.Menu.entTypeParent:SetDisabled(isPanel)
 				Editor.Tab.Menu.entTypeParent:SetText("Entity Type: " .. (Editor.Session.GetEntType(session) or "None"))
 			end
 			-- Update autorun option
-			if session.file and not isConsole then
+			if session.file and not isPanel then
 				Editor.Tab.Menu.autorunOption:SetDisabled(false)
 				local isAutorun = Noir.Autorun.IsAutorun(session.file[1], session.file[2])
 				Editor.Tab.Menu.autorunOption:SetText(isAutorun and "Remove from Autorun" or "Add to Autorun")
@@ -176,6 +191,8 @@ function Editor.Tab.Add(session)
 		elseif keyCode == MOUSE_MIDDLE then
 			if isConsole then
 				Editor.Console.Close(session.name)
+			elseif isSql then
+				Editor.Database.Close(session.name)
 			else
 				Editor.Session.CloseTab(session.name)
 			end
@@ -202,7 +219,7 @@ end
 function Editor.Tab.SetActive(sessionName, noJS)
 	if not Editor.SessionsByName[sessionName] then return end
 	local session = Editor.SessionsByName[sessionName]
-	local sessionType = session.sessionType or "editor"
+	local sessionType = session.sessionType or Editor.SessionType.Editor
 	-- Mark old tab as inactive
 	if Editor.ActiveSession and IsValid(Editor.ActiveSession.TabPanel) then Editor.ActiveSession.TabPanel.IsActive = false end
 	-- Update active session
@@ -210,7 +227,7 @@ function Editor.Tab.SetActive(sessionName, noJS)
 	-- Switch between Monaco and REPL panels
 	Editor.Tab.SetContentPanel(sessionType)
 	-- Only interact with Monaco for editor sessions
-	if sessionType == "editor" and not noJS then Editor.MonacoPanel:SetSession(sessionName) end
+	if sessionType == Editor.SessionType.Editor and not noJS then Editor.MonacoPanel:SetSession(sessionName) end
 	-- Mark new tab as active and scroll to it
 	if Editor.ActiveSession.TabPanel then
 		Editor.ActiveSession.TabPanel.IsActive = true

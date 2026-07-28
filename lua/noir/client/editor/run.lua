@@ -3,7 +3,8 @@ Noir.Editor = Editor
 Editor.Run = Editor.Run or {}
 
 function Editor.Run.Code(target)
-	if Editor.ActiveSession and Editor.ActiveSession.sessionType == "console" then return end
+	-- Panel tabs (console / SQL) don't run through the editor's Monaco run path.
+	if Editor.Session.IsPanel(Editor.ActiveSession) then return end
 	Editor.Run.LastTarget = target
 	Editor.Storage.QueueSave()
 	-- JS tabs run in the editor's own DHTML (JS is local-only, so `target` is

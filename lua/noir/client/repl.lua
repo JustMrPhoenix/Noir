@@ -164,6 +164,9 @@ function PANEL:FillMenu()
 		self:AddRunOption(v:Nick(), v, v:IsSuperAdmin() and "icon16/user_suit.png" or "icon16/user.png", runOnSubmenu)
 	end
 
+	-- SingleRealm panels (the SQL tab) target exactly one realm -- a query returning
+	-- rows only makes sense against a single database, so omit clients/shared.
+	if self.SingleRealm then return end
 	self:AddRunOption("Run on clients", "clients", "icon16/group.png")
 	self:AddRunOption("Run on shared", "shared", "icon16/world.png")
 end

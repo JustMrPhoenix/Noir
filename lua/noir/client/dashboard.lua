@@ -305,7 +305,13 @@ function Dashboard.ResetTab(tabName)
 end
 
 -- Persistence
+-- Debounced: a burst of Set calls (e.g. resetting a whole tab, reordering a list)
+-- collapses into a single disk write on the next frame instead of one write per value.
 function Dashboard.Save()
+	timer.Create("Noir.Dashboard.Save", 0.1, 1, Dashboard.DoSave)
+end
+
+function Dashboard.DoSave()
 	local saveData = {}
 	for fullKey, value in pairs(Dashboard.Values) do
 		-- Check if this type is persistent
@@ -471,10 +477,32 @@ function Dashboard.SetActiveTab(tabName)
 		end
 	end
 
+	-- Build the panel lazily the first time this tab is shown, so opening the
+	-- dashboard (and switching tabs) only pays for the tab you actually look at.
+	if not IsValid(Dashboard.TabPanels[tabName]) and Dashboard.Registrations[tabName] then
+		Dashboard.BuildTabPanel(tabName)
+	end
+
 	-- Show/hide panels
 	for name, panel in pairs(Dashboard.TabPanels) do
 		if IsValid(panel) then panel:SetVisible(name == tabName) end
 	end
+end
+
+-- Build (or rebuild) a single tab's content panel on demand. Used for lazy
+-- first-show and for refreshing just the active tab after a reset, instead of
+-- tearing down and rebuilding every tab via RefreshTabs.
+function Dashboard.BuildTabPanel(tabName)
+	local reg = Dashboard.Registrations[tabName]
+	if not reg or not IsValid(Dashboard.ContentArea) then return end
+	local existing = Dashboard.TabPanels[tabName]
+	if IsValid(existing) then existing:Remove() end
+	local panel = Dashboard.CreateTabPanel(reg)
+	panel:SetParent(Dashboard.ContentArea)
+	panel:Dock(FILL)
+	panel:SetVisible(Dashboard.ActiveTab == tabName)
+	Dashboard.TabPanels[tabName] = panel
+	return panel
 end
 
 function Dashboard.RefreshTabs()
@@ -551,12 +579,8 @@ function Dashboard.RefreshTabs()
 		btn.DoClick = function() Dashboard.SetActiveTab(reg.name) end
 		Dashboard.Tabs[reg.name] = btn
 		xPos = xPos + btn:GetWide() + 2
-		-- Create content panel
-		local panel = Dashboard.CreateTabPanel(reg)
-		panel:SetParent(Dashboard.ContentArea)
-		panel:Dock(FILL)
-		panel:SetVisible(false)
-		Dashboard.TabPanels[reg.name] = panel
+		-- Content panels are built lazily on first show (see SetActiveTab), so
+		-- opening the dashboard doesn't construct every tab's controls up front.
 	end
 
 	-- Activate first tab
@@ -700,7 +724,7 @@ function Dashboard.CreateTabPanel(registration)
 	resetBtn.HoveredColor = Color(120, 50, 50)
 	resetBtn.DoClick = function()
 		Dashboard.ResetTab(registration.name)
-		Dashboard.RefreshTabs()
+		Dashboard.BuildTabPanel(registration.name)
 	end
 
 	content:InvalidateLayout(true)
@@ -752,7 +776,7 @@ function Dashboard.CreateSettingRow(parent, setting, tabName)
 		resetBtn.HoveredColor = Color(80, 80, 80)
 		resetBtn.DoClick = function()
 			Dashboard.ResetToDefault(tabName, setting.key)
-			Dashboard.RefreshTabs()
+			Dashboard.BuildTabPanel(tabName)
 		end
 	end
 

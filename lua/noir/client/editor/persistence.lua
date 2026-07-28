@@ -166,7 +166,7 @@ function Editor.Storage.LoadSessions()
 			{
 				name = "Main Console",
 				code = "",
-				sessionType = "console",
+				sessionType = Editor.SessionType.Console,
 				isMainConsole = true
 			},
 			{
@@ -202,15 +202,22 @@ end
 -- REPL command history, persisted per language so Lua and JS keep separate
 -- histories that survive editor reloads and game restarts. Stored newest-first.
 local REPL_HISTORY_FILE = Noir.STORAGE_PATH .. "repl_history.json"
--- The REPL only distinguishes "javascript" from Lua; everything else is glua.
-local function NormalizeReplLang(language) return language == "javascript" and "javascript" or "glua" end
+-- The REPL keeps a separate history per kind: JavaScript, SQL, and Lua (the
+-- default for anything else).
+local function NormalizeReplLang(language)
+	if language == "javascript" then return "javascript" end
+	if language == "sql" then return "sql" end
+	return "glua"
+end
+
 function Editor.Storage.LoadReplHistory()
-	Editor.ReplHistory = {glua = {}, javascript = {}}
+	Editor.ReplHistory = {glua = {}, javascript = {}, sql = {}}
 	if not file.Exists(REPL_HISTORY_FILE, "DATA") then return end
 	local data = util.JSONToTable(file.Read(REPL_HISTORY_FILE) or "")
 	if not istable(data) then return end
 	if istable(data.glua) then Editor.ReplHistory.glua = data.glua end
 	if istable(data.javascript) then Editor.ReplHistory.javascript = data.javascript end
+	if istable(data.sql) then Editor.ReplHistory.sql = data.sql end
 end
 
 function Editor.Storage.SaveReplHistory()

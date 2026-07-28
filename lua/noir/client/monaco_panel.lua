@@ -110,7 +110,7 @@ end
 -- The choice is persisted on the session so it survives reloads.
 function PANEL:SetLanguage(langId)
 	local session = Noir.Editor.ActiveSession
-	if not session or session.sessionType == "console" then return end
+	if not session or Noir.Editor.Session.IsPanel(session) then return end
 	self:RunJS("gmodinterface.SetLanguage(%q)", langId)
 	self.Language = langId
 	self.LanguageData = {}

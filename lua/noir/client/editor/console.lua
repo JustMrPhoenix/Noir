@@ -25,7 +25,7 @@ function Editor.Console.CreateTab(consoleName, isMain)
 	local session = {
 		name = consoleName,
 		code = "",
-		sessionType = "console",
+		sessionType = Editor.SessionType.Console,
 		SavedCode = "",
 		isMainConsole = isMain or false
 	}
@@ -137,7 +137,7 @@ end
 -- Close a console tab
 function Editor.Console.Close(consoleName)
 	local session = Editor.SessionsByName[consoleName]
-	if not session or session.sessionType ~= "console" then return end
+	if not session or session.sessionType ~= Editor.SessionType.Console then return end
 	-- Remove REPL panel
 	if session.ReplPanel then
 		session.ReplPanel:Remove()
@@ -154,10 +154,10 @@ end
 
 -- Toggle main console tab visibility
 function Editor.Console.Toggle()
-	if Editor.ActiveSession and Editor.ActiveSession.sessionType == "console" then
-		-- Switch to first non-console tab
+	if Editor.ActiveSession and Editor.ActiveSession.sessionType == Editor.SessionType.Console then
+		-- Switch to the first editor (non-panel) tab
 		for _, s in ipairs(Editor.Sessions) do
-			if s.sessionType ~= "console" then
+			if not Editor.Session.IsPanel(s) then
 				Editor.Tab.SetActive(s.name)
 				return
 			end

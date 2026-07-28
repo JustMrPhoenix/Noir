@@ -2,6 +2,14 @@ local Editor = Noir.Editor or {}
 Noir.Editor = Editor
 Editor.Session = Editor.Session or {}
 
+-- Sessions whose content is a bespoke per-session panel (console REPL / SQL tab),
+-- not a Monaco document. They can't be saved or renamed as files, carry no entity
+-- type, and their teardown removes the panel instead of a Monaco model.
+Editor.Session.PanelTypes = {[Editor.SessionType.Console] = true, [Editor.SessionType.SQL] = true}
+function Editor.Session.IsPanel(session)
+	return session ~= nil and Editor.Session.PanelTypes[session.sessionType] ~= nil
+end
+
 -- Move a file to the front of the recent-files history (dedup, cap at 10) and
 -- refresh the "Open Recent" menu. Called on both open and close.
 function Editor.Session.AddRecent(path, fileName)
@@ -122,15 +130,15 @@ function Editor.Session.Close(sessionName, nextActive, noSave)
 		Editor.Tab.SetActive(Editor.Sessions[#Editor.Sessions < idx and #Editor.Sessions or idx].name)
 	end
 
-	if not session or session.sessionType ~= "console" then
-		-- When the newly active tab is a console, SetActive left Monaco pointing at
-		-- the session we're closing. Hand the frontend another editor session to
-		-- switch to (it fabricates an "Unnamed" document otherwise) and flag the
-		-- resulting OnSessionSet so it doesn't steal the active tab from the console.
+	if not Editor.Session.IsPanel(session) then
+		-- When the newly active tab is a panel tab (console / SQL), SetActive left
+		-- Monaco pointing at the session we're closing. Hand the frontend another
+		-- editor session to switch to (it fabricates an "Unnamed" document otherwise)
+		-- and flag the resulting OnSessionSet so it doesn't steal the active tab.
 		local switchTo
-		if Editor.ActiveSession and Editor.ActiveSession.sessionType == "console" then
+		if Editor.Session.IsPanel(Editor.ActiveSession) then
 			for _, v in ipairs(Editor.Sessions) do
-				if v.sessionType ~= "console" then
+				if not Editor.Session.IsPanel(v) then
 					switchTo = v.name
 					break
 				end
@@ -193,7 +201,7 @@ end
 -- Effective ent type for a session, in priority order: first-line comment ->
 -- manual override (entTypeOverride, "none" = explicitly off) -> file path.
 function Editor.Session.GetEntType(session)
-	if not session or session.sessionType == "console" then return nil end
+	if not session or Editor.Session.IsPanel(session) then return nil end
 	local firstLine = string.match(session.code or "", "^[^\n]*")
 	local commentType = Editor.Session.ParseEntComment(firstLine)
 	if commentType then return commentType end
@@ -227,9 +235,11 @@ function Editor.Session.GetEntClass(session)
 	return string.StripExtension(session.name or "")
 end
 
--- Left-hand tab icon: terminal for the console, gun/brick for SWEP/SENT, else page.
+-- Left-hand tab icon: terminal for the console, database for an SQL tab, gun/brick
+-- for SWEP/SENT, else page.
 function Editor.Session.IconFor(session)
-	if session.sessionType == "console" then return "icon16/application_xp_terminal.png" end
+	if session.sessionType == Editor.SessionType.Console then return "icon16/application_xp_terminal.png" end
+	if session.sessionType == Editor.SessionType.SQL then return "icon16/database.png" end
 	local entType = Editor.Session.GetEntType(session)
 	return (entType and Editor.Session.EntIcons[entType]) or "icon16/page.png"
 end
@@ -237,7 +247,7 @@ end
 function Editor.Session.Update(sessionName)
 	local session = Editor.SessionsByName[sessionName]
 	-- Skip icon updates for console tab (always uses terminal icon)
-	if session.sessionType == "console" then return end
+	if session.sessionType == Editor.SessionType.Console then return end
 	-- Used to update code here with latest in file but it breaks if switching tabs fast
 	if IsValid(session.TabPanel) then
 		session.TabPanel:SetTooltip(session.file and Format("[%s] %s", unpack(session.file)) or session.name)
@@ -352,7 +362,7 @@ function Editor.Session.SaveAs(sessionName, callback)
 	end
 
 	if not session then return end
-	if session.sessionType == "console" then return end
+	if Editor.Session.IsPanel(session) then return end
 	local fileName = sessionName
 	local extension = string.GetExtensionFromFilename(fileName)
 	if not extension then
@@ -391,7 +401,7 @@ function Editor.Session.Save(sessionName, callback)
 	end
 
 	if not session then return end
-	if session.sessionType == "console" then return end
+	if Editor.Session.IsPanel(session) then return end
 	if session.file and session.file[1] == "DATA" then
 		file.Write(session.file[2], session.code)
 		session.SavedCode = session.code

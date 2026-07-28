@@ -28,12 +28,51 @@ local function fmtNum(n)
 	return s
 end
 
+-- A comparator that never errors on non-comparable operands. GMod's SortedPairs /
+-- SortedPairsByValue do a raw `a < b`, which throws ("attempt to compare two
+-- userdata values" / "compare number with string") the moment a table is keyed by
+-- (or holds) entities, or mixes key/value types -- both common for run results. We
+-- order by type name first, then `<` for the comparable primitives, else by string
+-- form, so any value set sorts deterministically without blowing up the whole run.
+local function safeLess(a, b)
+	local ta, tb = type(a), type(b)
+	if ta ~= tb then return ta < tb end
+	if ta == "number" or ta == "string" then return a < b end
+	return tostring(a) < tostring(b)
+end
+
+local function safeSortedPairs(tbl)
+	local keys = {}
+	for k in pairs(tbl) do keys[#keys + 1] = k end
+	table.sort(keys, safeLess)
+	local i = 0
+	return function()
+		i = i + 1
+		local k = keys[i]
+		if k == nil then return nil end
+		return k, tbl[k]
+	end
+end
+
+local function safeSortedPairsByValue(tbl)
+	local kv = {}
+	for k, v in pairs(tbl) do kv[#kv + 1] = {k = k, v = v} end
+	table.sort(kv, function(a, b) return safeLess(a.v, b.v) end)
+	local i = 0
+	return function()
+		i = i + 1
+		local e = kv[i]
+		if e == nil then return nil end
+		return e.k, e.v
+	end
+end
+
 function Format.GetIterator(opts)
 	local mode = istable(opts) and opts.sortMode
 	if mode == "SortedPairs" then
-		return SortedPairs
+		return safeSortedPairs
 	elseif mode == "SortedPairsByValue" then
-		return SortedPairsByValue
+		return safeSortedPairsByValue
 	end
 	return pairs
 end
@@ -510,11 +549,12 @@ function Format.FormatLong(val, level, opts, doneTbls)
 	-- For --depth, we expand like --full but limited to the specified depth
 	local shouldExpand = doFull or opts.shallow or opts.depth
 	for k, v in Format.GetIterator(opts)(val) do
-		done = done + 1
-		if done > 100 and not doFull and not opts.depth and not opts.shallow then
+		if done >= 100 and not doFull and not opts.depth and not opts.shallow then
 			result = fmt("%s\n%s-- %s more...", result, string.rep(" ", (level + 1) * 4), total - done)
 			break
 		end
+
+		done = done + 1
 
 		if sequential then
 			local str, cmt

@@ -11,7 +11,12 @@ function Editor.SetFocusAlpha(hasFocus)
 	local a = hasFocus and 255 or 190
 	if IsValid(Editor.Frame) then Editor.Frame:SetAlpha(a) end
 	if IsValid(Editor.MonacoPanel) then Editor.MonacoPanel:SetAlpha(a) end
-	if Editor.ActiveSession and IsValid(Editor.ActiveSession.ReplPanel) then Editor.ActiveSession.ReplPanel:SetAlpha(a) end
+	local active = Editor.ActiveSession
+	if active then
+		-- The active tab's DHTML REPL (console) or SQL tab's REPL, whichever it is.
+		if IsValid(active.ReplPanel) then active.ReplPanel:SetAlpha(a) end
+		if IsValid(active.DBPanel) and IsValid(active.DBPanel.ReplPanel) then active.DBPanel.ReplPanel:SetAlpha(a) end
+	end
 end
 
 -- True once the Monaco editor and every open console REPL panel have finished
@@ -302,12 +307,19 @@ function Editor.UI.CreateFrame(preload)
 
 		Editor.Console.Sessions = {}
 		Editor.Console.Main = nil
+		-- Clear SQL tab panels (transient; not restored from sessions.json)
+		for _, sqlSession in pairs(Editor.Database and Editor.Database.Sessions or {}) do
+			if IsValid(sqlSession.DBPanel) then sqlSession.DBPanel:Remove() end
+		end
+
+		if Editor.Database then Editor.Database.Sessions = {} end
 		-- Always load sessions fresh from file
 		Editor.Storage.LoadSessions()
 		for _, session in ipairs(Editor.Sessions) do
 			Editor.Tab.Add(session)
-			-- Create REPL panels for restored console sessions
-			if session.sessionType == "console" then
+			-- Rebuild the bespoke panel for restored panel sessions (console REPLs and
+			-- SQL tabs). SQL tabs reopen empty -- only their name/target/history persist.
+			if session.sessionType == Editor.SessionType.Console then
 				local replPanel = vgui.Create("NoirReplPanel", frame)
 				replPanel:DockMargin(0, 0, -5, -5)
 				replPanel:Dock(FILL)
@@ -330,6 +342,8 @@ function Editor.UI.CreateFrame(preload)
 				replPanel.HTMLPanel.OnFocusChanged = function(_, hasFocus) Editor.SetFocusAlpha(hasFocus) end
 				Editor.Console.Sessions[session.name] = session
 				if session.isMainConsole then Editor.Console.Main = session end
+			elseif session.sessionType == Editor.SessionType.SQL then
+				Editor.Database.BuildPanel(session)
 			end
 		end
 
@@ -347,20 +361,21 @@ function Editor.UI.CreateFrame(preload)
 			Editor.Config.activeSession = activeSession
 		end
 
-		-- Filter out console sessions for Monaco (it only handles editor sessions)
+		-- Filter out panel sessions (consoles / SQL tabs) for Monaco -- it only
+		-- handles editor documents.
 		local editorSessions = {}
 		for _, session in ipairs(Editor.Sessions) do
-			if session.sessionType ~= "console" then table.insert(editorSessions, session) end
+			if not Editor.Session.IsPanel(session) then table.insert(editorSessions, session) end
 		end
 
-		-- Monaco only knows editor sessions. If the active tab is a console (e.g.
-		-- Main Console), pointing Monaco's newActive at it triggers a JS-side
-		-- "Cant find session named ..." error, so hand Monaco the first editor
-		-- session instead. Editor.Tab.SetActive below still shows the correct
-		-- console panel.
+		-- Monaco only knows editor sessions. If the active tab is a panel tab (e.g.
+		-- the Main Console or an SQL tab), pointing Monaco's newActive at it triggers
+		-- a JS-side "Cant find session named ..." error, so hand Monaco the first
+		-- editor session instead. Editor.Tab.SetActive below still shows the correct
+		-- panel.
 		local monacoActive = activeSession
 		local activeObj = Editor.SessionsByName[activeSession]
-		if not activeObj or activeObj.sessionType == "console" then
+		if not activeObj or Editor.Session.IsPanel(activeObj) then
 			monacoActive = editorSessions[1] and editorSessions[1].name or nil
 		end
 
@@ -375,10 +390,10 @@ function Editor.UI.CreateFrame(preload)
 	monaco.OnSessionSet = function(_, session)
 		if not monaco.Ready then return end
 		if session.name == "Unnamed" then
-			local consoleActive = Editor.ActiveSession and Editor.ActiveSession.sessionType == "console"
-			if not consoleActive then Noir.Error("Something went wrong, creating an empty session\n") end
+			local panelActive = Editor.Session.IsPanel(Editor.ActiveSession)
+			if not panelActive then Noir.Error("Something went wrong, creating an empty session\n") end
 			local created = Editor.Session.Create()
-			if consoleActive and created then Editor.Tab.SuppressActivate = created.name end
+			if panelActive and created then Editor.Tab.SuppressActivate = created.name end
 			monaco:CloseSession("Unnamed")
 		elseif Editor.Tab.SuppressActivate == session.name then
 			Editor.Tab.SuppressActivate = nil
@@ -389,9 +404,9 @@ function Editor.UI.CreateFrame(preload)
 
 	monaco.OnCode = function(_, code)
 		if not Editor.ActiveSession then return end
-		-- Monaco is hidden while a console tab is active; anything arriving here is
-		-- a background model swap, not a user edit -- don't clobber the console session.
-		if Editor.ActiveSession.sessionType == "console" then return end
+		-- Monaco is hidden while a panel tab (console / SQL) is active; anything
+		-- arriving here is a background model swap, not a user edit -- don't clobber it.
+		if Editor.Session.IsPanel(Editor.ActiveSession) then return end
 		local modified = Editor.ActiveSession.SavedCode ~= code
 		Editor.ActiveSession.code = code
 		Editor.ActiveSession.Modified = modified

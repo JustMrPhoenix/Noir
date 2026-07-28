@@ -5,6 +5,16 @@ Editor.Sessions = Editor.Sessions or {}
 Editor.SessionsByName = Editor.SessionsByName or {}
 Editor.PendingOnReady = {} -- Actions queued until editor is ready
 
+-- Tab/session kinds. Editor = a Monaco document; Console = a REPL panel; SQL = a
+-- database query tab. The string values are what's stored on a session and in
+-- sessions.json, so they must stay stable. Console/SQL are "panel" sessions -- they
+-- own a bespoke per-session panel rather than a Monaco model (Editor.Session.IsPanel).
+Editor.SessionType = {
+	Editor = "editor",
+	Console = "console",
+	SQL = "sql"
+}
+
 function Editor.RegisterActions(panel)
 	panel:AddAction("fileNew", "File: New File", function() Editor.Session.Create() end, "Mod.CtrlCmd | Key.KeyN")
 	panel:AddAction("fileOpen", "File: Open File...", function() Noir.FileBrowser.Open(true) end, "Mod.CtrlCmd | Key.KeyO")
@@ -13,8 +23,11 @@ function Editor.RegisterActions(panel)
 	panel:AddAction("fileSaveAs", "File: Save As...", function() Editor.Session.SaveAs() end, "Mod.CtrlCmd | Mod.Shift | Key.KeyS")
 	panel:AddAction("sessionClose", "Close tab", function()
 		if not Editor.ActiveSession then return end
-		if Editor.ActiveSession.sessionType == "console" then
+		local kind = Editor.ActiveSession.sessionType
+		if kind == Editor.SessionType.Console then
 			Editor.Console.Close(Editor.ActiveSession.name)
+		elseif kind == Editor.SessionType.SQL then
+			Editor.Database.Close(Editor.ActiveSession.name)
 		else
 			Editor.Session.CloseTab(Editor.ActiveSession.name)
 		end
