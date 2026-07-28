@@ -100,6 +100,41 @@ function PANEL:Populate(schema)
 		if not node or not node.TableName then return end
 		Noir.Editor.Database.OpenQueryTab(self:GetRealm(), Format("SELECT * FROM %s LIMIT 50", node.TableName), true)
 	end
+
+	-- Right-click a table node -> context menu. Like DoDoubleClick, DTree dispatches
+	-- the right-click at the root (node-level handlers don't fire); `node` is the
+	-- clicked DTree_Node.
+	tree.DoRightClick = function(_, node)
+		if not node or not node.TableName then return end
+		self:OpenNodeMenu(node)
+	end
+end
+
+-- Row-limit choices for the "Select from <table>" submenu. `false` means no LIMIT
+-- clause (every row).
+local SELECT_LIMITS = {10, 25, 50, 100, 500, 1000, false}
+
+-- Build and open the right-click menu for a table node. Currently one entry: a
+-- "Select from <table>" submenu whose choices each open an SQL tab on this realm
+-- and run `SELECT * FROM <table> [LIMIT n]`.
+function PANEL:OpenNodeMenu(node)
+	local tableName = node.TableName
+	local menu = DermaMenu()
+	menu:SetSkin("Noir")
+
+	local submenu, option = menu:AddSubMenu("Select from " .. tableName)
+	option:SetIcon("icon16/database_go.png")
+	option:SetTextColor(Color(200, 200, 200))
+	submenu:SetSkin("Noir")
+	for _, limit in ipairs(SELECT_LIMITS) do
+		local label = limit and ("LIMIT " .. limit) or "All rows"
+		local query = limit and Format("SELECT * FROM %s LIMIT %d", tableName, limit) or Format("SELECT * FROM %s", tableName)
+		Noir.Utils.AddMenuOption(submenu, label, function()
+			Noir.Editor.Database.OpenQueryTab(self:GetRealm(), query, true)
+		end, "icon16/table.png")
+	end
+
+	menu:Open()
 end
 
 function PANEL:OnRemove()

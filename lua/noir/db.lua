@@ -117,6 +117,20 @@ Noir.Network.ChannelHandlers["dbQuery"] = {
 }
 
 if CLIENT then
+	-- Cached schema per target, keyed by TargetKey, so SQL autocomplete can answer
+	-- Monaco synchronously (it has a short deadline and a remote schema fetch is a
+	-- network round-trip). Populated whenever a schema is fetched (the DB browser
+	-- refresh, an autocomplete warm-up, or an explicit prefetch).
+	DB.SchemaCache = DB.SchemaCache or {}
+	DB.SchemaPending = DB.SchemaPending or {}
+
+	-- Stable string key for a query target ("self" / "server" / a Player).
+	local function TargetKey(target)
+		if isstring(target) then return target end
+		if IsValid(target) and target.EntIndex then return "ply:" .. target:EntIndex() end
+		return "self"
+	end
+
 	----------------------------------------------------------------------
 	-- Run `query` against `target` ("self" / "server" / a Player) and hand the
 	-- normalised result table to `onResult`. "self" runs locally and synchronously;
@@ -135,17 +149,101 @@ if CLIENT then
 		end)
 	end
 
-	-- Fetch the schema of `target`'s database. Same self/remote split as SendQuery.
+	-- Fetch the schema of `target`'s database and cache it. Same self/remote split as
+	-- SendQuery. `onResult` is optional (a prefetch just warms the cache).
 	function DB.SendSchema(target, onResult)
+		local key = TargetKey(target)
+		local function deliver(schema)
+			DB.SchemaCache[key] = schema
+			if onResult then onResult(schema) end
+		end
+
 		if target == "self" then
-			onResult(DB.GetSchema())
+			deliver(DB.GetSchema())
 			return
 		end
 
 		local payload = util.TableToJSON({mode = "schema"})
 		return Noir.Network.Request("dbQuery", target, payload, function(reply)
-			onResult(util.JSONToTable(reply) or {tables = {}})
+			deliver(util.JSONToTable(reply) or {tables = {}})
 		end)
+	end
+
+	-- The most recently fetched schema for `target`, or nil if never fetched.
+	function DB.GetCachedSchema(target)
+		return DB.SchemaCache[TargetKey(target)]
+	end
+
+	-- Warm the schema cache for `target` without a caller. A no-op if the schema is
+	-- cached or a fetch is already in flight, so it's safe to call on every keystroke.
+	function DB.PrefetchSchema(target)
+		local key = TargetKey(target)
+		if DB.SchemaCache[key] or DB.SchemaPending[key] then return end
+		DB.SchemaPending[key] = true
+		DB.SendSchema(target, function() DB.SchemaPending[key] = nil end)
+	end
+
+	-- Build a Monaco completion item (see completionProvider.ts DynamicAutocompleteItem)
+	-- for a schema column. `tableName` is included in the detail when the column isn't
+	-- already scoped to a table by the request.
+	local function columnItem(col, tableName)
+		local detail = col.type or "column"
+		if tableName then detail = detail .. " · " .. tableName end
+		if (tonumber(col.pk) or 0) > 0 then detail = detail .. " · PK" end
+		return {label = col.name, kind = "Field", detail = detail}
+	end
+
+	----------------------------------------------------------------------
+	-- Turn `target`'s cached schema into Monaco SQL completion items for the given
+	-- request `context` (from the frontend's SQLCompletionProvider):
+	--   * after `table.` (context.lastChar == "." and fullIdentifier names a table) ->
+	--     that table's columns;
+	--   * otherwise -> every table name plus each distinct column name.
+	-- Returns {} (and kicks off a prefetch) when the schema isn't cached yet.
+	----------------------------------------------------------------------
+	function DB.BuildCompletions(target, context)
+		local schema = DB.GetCachedSchema(target)
+		if not schema then
+			DB.PrefetchSchema(target)
+			schema = DB.GetCachedSchema(target) -- populated synchronously for "self"
+			if not schema then return {} end
+		end
+
+		local tables = schema.tables or {}
+		local items = {}
+		local ident = isstring(context.fullIdentifier) and context.fullIdentifier or ""
+		if context.lastChar == "." and ident ~= "" then
+			local want = string.lower(ident)
+			for _, tbl in ipairs(tables) do
+				if string.lower(tbl.name) == want then
+					for _, col in ipairs(tbl.columns or {}) do
+						items[#items + 1] = columnItem(col, nil)
+					end
+
+					break
+				end
+			end
+
+			return items
+		end
+
+		local seenCols = {}
+		for _, tbl in ipairs(tables) do
+			local colCount = #(tbl.columns or {})
+			items[#items + 1] = {
+				label = tbl.name,
+				kind = "Class",
+				detail = Format("table · %d column%s", colCount, colCount == 1 and "" or "s")
+			}
+			for _, col in ipairs(tbl.columns or {}) do
+				if not seenCols[col.name] then
+					seenCols[col.name] = true
+					items[#items + 1] = columnItem(col, tbl.name)
+				end
+			end
+		end
+
+		return items
 	end
 end
 

@@ -5,11 +5,66 @@ Editor.Database.Sessions = Editor.Database.Sessions or {} -- name -> sql session
 Editor.Database.Counter = Editor.Database.Counter or 0
 
 --------------------------------------------------------------------------------
+-- NoirSqlReplPanel: a NoirReplPanel locked to SQLite. It inherits the whole REPL
+-- (input line, output pane, target selector, history) and only layers on the
+-- SQL-specific behaviour, so the base REPL stays language-agnostic:
+--   * forces the Monaco "sql" model + prompt and hides the Lua/JS selector,
+--   * restricts the target selector to a single realm (SingleRealm),
+--   * feeds live table/column completions from the target realm's cached DB
+--     schema over Monaco's dynamic-completion channel (JS_OnAutocompleteRequest).
+--------------------------------------------------------------------------------
+local SQLREPL = {}
+SQLREPL.Base = "NoirReplPanel"
+
+function SQLREPL:Init()
+	self.BaseClass.Init(self)
+	self.SingleRealm = true -- FillMenu drops clients/shared: a query hits one DB
+	-- The language is fixed to SQL, so hide the Lua/JS language selector.
+	if IsValid(self.LanguageCombo) then self.LanguageCombo:SetVisible(false) end
+
+	-- Force the SQL model + prompt and enable dynamic completions once the frontend
+	-- is ready. SwitchLanguage from the default glua resets output/history/autocomplete
+	-- and swaps the prompt to "sql>".
+	local function applySQL()
+		if not IsValid(self) then return end
+		self:SwitchLanguage("sql")
+		self:RunJS("if (replinterface.EnableDynamicAutocomplete) replinterface.EnableDynamicAutocomplete(500)")
+	end
+
+	if self.Ready then
+		applySQL()
+	else
+		local prev = self.OnReady
+		self.OnReady = function(p)
+			if prev then prev(p) end
+			applySQL()
+		end
+	end
+end
+
+-- Register the dynamic-completion callback on top of the base REPL's JS callbacks.
+function SQLREPL:SetupHTML()
+	self.BaseClass.SetupHTML(self)
+	self:AddJSCallback("OnAutocompleteRequest")
+end
+
+-- Monaco asks for dynamic completions (SQL mode). Answer with table/column names
+-- from the target realm's cached DB schema; BuildCompletions warms the cache and
+-- returns {} until it's ready, so the frontend falls back to its static list.
+function SQLREPL:JS_OnAutocompleteRequest(context, requestId)
+	context = context or {}
+	local items = context.language == "sql" and Noir.DB.BuildCompletions(self.Target or "self", context) or {}
+	local json = #items > 0 and util.TableToJSON(items) or "[]"
+	self:RunJS("if (window.replinterface && replinterface.ProvideAutocompleteItems) replinterface.ProvideAutocompleteItems(%d, %s)", requestId, json)
+end
+
+vgui.Register("NoirSqlReplPanel", SQLREPL, "NoirReplPanel")
+
+--------------------------------------------------------------------------------
 -- The SQL tab: a bespoke per-session panel (like a console) rather than a Monaco
--- document. It reuses the Monaco REPL for SQL input -- forced to the "sql"
--- language and with its OnCode re-pointed at DB queries -- above a DListView that
--- renders the returned rows. A run targets exactly one realm (self / server / a
--- specific player); clients/shared are omitted (see repl.lua SingleRealm).
+-- document. It hosts a NoirSqlReplPanel for SQL input -- with its OnCode re-pointed
+-- at DB queries -- above a DListView that renders the returned rows. A run targets
+-- exactly one realm (self / server / a specific player); clients/shared are omitted.
 --------------------------------------------------------------------------------
 local PANEL = {}
 
@@ -28,12 +83,9 @@ function PANEL:Init()
 	divider:SetDividerHeight(6)
 	self.Divider = divider
 
-	-- Reused REPL, driven as the SQL console. Parented to the divider (SetTop only
-	-- positions the child, it doesn't reparent).
-	local repl = vgui.Create("NoirReplPanel", divider)
-	repl.SingleRealm = true -- FillMenu drops clients/shared for this panel
-	-- The language is fixed to SQL, so hide the Lua/JS language selector.
-	if IsValid(repl.LanguageCombo) then repl.LanguageCombo:SetVisible(false) end
+	-- SQL-locked REPL, driven as the SQL console. Parented to the divider (SetTop
+	-- only positions the child, it doesn't reparent).
+	local repl = vgui.Create("NoirSqlReplPanel", divider)
 	-- Route a submitted line to our query runner instead of the Lua run channel.
 	-- Setting the instance field shadows PANEL:OnCode; JS_OnCode calls self:OnCode.
 	repl.OnCode = function(_, code) self:RunSQL(code, true) end
@@ -45,23 +97,6 @@ function PANEL:Init()
 	divider:SetTop(repl)
 
 	self:BuildResults({columns = {}, rows = {}})
-
-	-- Force the SQL model + prompt once the frontend is ready. SwitchLanguage from
-	-- the default glua resets output/history/autocomplete and swaps the prompt to
-	-- "sql>" (frontend falls back to "<lang>>" for languages without an entry).
-	local function applySQL()
-		if IsValid(repl) then repl:SwitchLanguage("sql") end
-	end
-
-	if repl.Ready then
-		applySQL()
-	else
-		local prev = repl.OnReady
-		repl.OnReady = function(p)
-			if prev then prev(p) end
-			applySQL()
-		end
-	end
 end
 
 function PANEL:RequestFocus()
@@ -160,6 +195,8 @@ function Editor.Database.SetPanelTarget(panel, target)
 	local repl = panel.ReplPanel
 	if not IsValid(repl) then return end
 	repl.Target = target -- source of truth for RunSQL, set eagerly
+	-- Warm this realm's schema cache so SQL autocomplete can answer synchronously.
+	Noir.DB.PrefetchSchema(target)
 	local function apply()
 		if not IsValid(repl) then return end
 		if isstring(target) then
