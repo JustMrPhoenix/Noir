@@ -1,4 +1,4 @@
-local Highlight = include("entity_highlight.lua")
+local Highlight = Noir.EntityHighlight
 local EntitySelector = Noir.EntitySelector or {}
 Noir.EntitySelector = EntitySelector
 -- Constants
@@ -59,17 +59,7 @@ local function truncateModel(model, maxLen)
 	return "..." .. string.sub(model, -(maxLen - 3))
 end
 
-local function makeCombo(parent, choices, current)
-	local combo = vgui.Create("DComboBox", parent)
-	combo:SetSkin("Noir")
-	combo.NoirValue = current
-	for _, c in ipairs(choices) do
-		combo:AddChoice(c.label, c.value, c.value == current)
-	end
-
-	combo.OnSelect = function(_, _, _, data) combo.NoirValue = data end
-	return combo
-end
+local makeCombo = Noir.Utils.MakeCombo
 
 --------------------------------------------------------------------------------
 -- Pick Mode (select entity from 3D view)
@@ -487,17 +477,7 @@ vgui.Register("NoirEntitySearch", PANEL, "DPanel")
 function EntitySelector.Open(options)
 	options = options or {}
 	if IsValid(EntitySelector.Frame) then EntitySelector.Frame:Remove() end
-	local frame = vgui.Create("DFrame")
-	frame:SetSkin("Noir")
-	frame:SetTitle(options.title or "Entity Search")
-	frame:SetSize(640, 460)
-	frame:Center()
-	frame:SetDraggable(true)
-	frame:SetSizable(true)
-	frame:SetDeleteOnClose(true)
-	frame:MakePopup()
-	frame.btnMinim:SetVisible(false)
-	frame.btnMaxim:SetVisible(false)
+	local frame = Noir.Utils.CreateNoirWindow(options.title or "Entity Search", 640, 460)
 
 	local content = vgui.Create("NoirEntitySearch", frame)
 	content:Dock(FILL)

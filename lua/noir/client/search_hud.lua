@@ -21,7 +21,7 @@ local fmt = string.format
 local THRESHOLD = 2 -- seconds a find must run before it appears
 local DONE_LINGER = 5 -- seconds a finished search stays on screen
 
-SearchHUD.Finds = SearchHUD.Finds or {} -- transferId -> item
+SearchHUD.Finds = SearchHUD.Finds or {} -- channelId -> item
 SearchHUD.FileItems = SearchHUD.FileItems or {} -- fileSearch object -> item
 -- item = {label, startTime, done, doneAt, elapsed}
 
@@ -30,12 +30,12 @@ local function shortName(identifier)
 	return (identifier:gsub("^Noir%.", ""))
 end
 
--- Track a --find search initiated on `transferId`. Marked done (kept for the linger
+-- Track a --find search initiated on `channelId`. Marked done (kept for the linger
 -- window) when its result arrives or the run channel closes.
-function SearchHUD.TrackFind(transferId, identifier)
-	if not transferId then return end
+function SearchHUD.TrackFind(channelId, identifier)
+	if not channelId then return end
 	local item = {label = shortName(identifier), startTime = SysTime(), done = false}
-	SearchHUD.Finds[transferId] = item
+	SearchHUD.Finds[channelId] = item
 	local function finish()
 		if item.done then return end
 		item.done = true
@@ -43,8 +43,8 @@ function SearchHUD.TrackFind(transferId, identifier)
 		item.elapsed = item.doneAt - item.startTime
 	end
 
-	Noir.Network.OnChannel(transferId, "run", finish)
-	Noir.Network.OnChannelClose(transferId, finish)
+	Noir.Network.OnChannel(channelId, "run", finish)
+	Noir.Network.OnChannelClose(channelId, finish)
 end
 
 -- Walk the find + file-search state, advancing lifecycles and dropping expired

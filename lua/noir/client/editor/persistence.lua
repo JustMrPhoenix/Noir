@@ -78,7 +78,7 @@ end
 -- Per-session fields that hold live VGUI panels / run channels and must never be
 -- serialized -- each tab type rebuilds them on restore (see the Build loop in
 -- frame.lua). Stripped from the saved copy below.
-local TRANSIENT_SESSION_FIELDS = {"TabPanel", "ReplPanel", "DBPanel", "runTransfers"}
+local TRANSIENT_SESSION_FIELDS = {"TabPanel", "ReplPanel", "DBPanel", "runChannels"}
 
 function Editor.Storage.SaveJS(jsSessionsData)
 	local sessions = table.Copy(Editor.Sessions)
@@ -107,8 +107,16 @@ function Editor.Storage.SaveJS(jsSessionsData)
 end
 
 function Editor.Storage.LoadConfig()
+	local existing
 	if file.Exists(Noir.STORAGE_PATH .. "config.json", "DATA") then
-		Editor.Config = util.JSONToTable(file.Read(Noir.STORAGE_PATH .. "config.json"))
+		existing = util.JSONToTable(file.Read(Noir.STORAGE_PATH .. "config.json") or "")
+		if not istable(existing) then
+			Noir.Warn("config.json is unreadable/corrupt, recreating defaults\n")
+		end
+	end
+
+	if istable(existing) then
+		Editor.Config = existing
 	else
 		Noir.Debug("config.json does not exist, creating new one")
 		-- Default to a roomy window (up to 1600x900), centered and clamped so it
@@ -166,8 +174,16 @@ function Editor.Storage.FirstRunCheck()
 end
 
 function Editor.Storage.LoadSessions()
+	local existing
 	if file.Exists(Noir.STORAGE_PATH .. "sessions.json", "DATA") then
-		Editor.Sessions = util.JSONToTable(file.Read(Noir.STORAGE_PATH .. "sessions.json"))
+		existing = util.JSONToTable(file.Read(Noir.STORAGE_PATH .. "sessions.json") or "")
+		if not istable(existing) then
+			Noir.Warn("sessions.json is unreadable/corrupt, recreating defaults\n")
+		end
+	end
+
+	if istable(existing) then
+		Editor.Sessions = existing
 	else
 		Noir.Debug("sessions.json does not exist, creating new one")
 		-- Fresh start: Main Console as the first tab, the Welcome demo document as

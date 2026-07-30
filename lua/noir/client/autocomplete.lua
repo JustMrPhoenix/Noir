@@ -8,7 +8,7 @@ function Autocomplete.GetValuesAndFuncs(tbl, name, scannedTbls, depth)
 	for k, v in pairs(tbl) do
 		-- nolint
 		if not isstring(k) then continue end
-		if k[1] == "_" then continue end
+		if k:sub(1, 1) == "_" then continue end
 		if not Noir.Utils.IsSafeKey(k) then continue end
 		local fullname = name and name .. "." .. k or k
 		if string.Trim(k) == "" then continue end

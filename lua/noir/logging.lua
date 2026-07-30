@@ -12,6 +12,13 @@ function Noir.Error(...)
 	Noir.Msg(Color(200, 0, 0), "[ERROR] ", whiteColor, ...)
 end
 
+function Noir.Warn(...)
+	Noir.Msg(Color(220, 150, 0), "[WARN] ", whiteColor, ...)
+end
+
+-- Error-and-throw: prints the [ERROR] line then raises via error(), so it never
+-- returns to its caller (no `return` needed after a call to it). Use Noir.Error
+-- (or Noir.Warn) for a non-halting message.
 function Noir.ErrorT(...)
 	Noir.Msg(Color(200, 0, 0), "[ERROR] ", whiteColor, ...)
 	-- error() takes (message, level) — concat the varargs into one message so a
@@ -22,10 +29,6 @@ function Noir.ErrorT(...)
 	end
 
 	error(table.concat(parts), 2)
-end
-
-function Noir.print(...)
-	print("[Noir] ", ...)
 end
 
 function Noir.Debug(...)

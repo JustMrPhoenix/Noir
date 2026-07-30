@@ -41,7 +41,6 @@ local LANGUAGE_COMBO_WIDTH = 70
 local JS_TARGET_LABEL = "This console"
 local JS_TARGET_ICON = "icon16/application_xp_terminal.png"
 
-PANEL.URL = Noir.DEBUG and "http://loopback.bestboy.moe:8080/repl.html" or "https://metastruct.github.io/gmod-monaco/repl.html"
 function PANEL:Init()
 	local html = self:Add("DHTML")
 	html:Dock(FILL)
@@ -86,20 +85,10 @@ function PANEL:Init()
 	end
 
 	-- Bottom-right language selector, mirroring the editor's (monaco_panel.lua).
-	local langCombo = self:Add("DComboBox")
-	langCombo:SetSkin("Noir")
-	langCombo:SetTextColor(Color(200, 200, 200))
-	langCombo:SetSortItems(false)
-	for _, choice in ipairs(LANGUAGE_CHOICES) do
-		langCombo:AddChoice(choice[1], choice[2])
-	end
-
-	langCombo:SetValue("Lua")
-	self.LanguageCombo = langCombo
-	langCombo.OnSelect = function(_, _, _, langId)
+	self.LanguageCombo = Noir.Utils.CreateLanguageCombo(self, LANGUAGE_CHOICES, function(langId)
 		if self.SuppressLangSelect then return end
 		self:SwitchLanguage(langId)
-	end
+	end)
 
 	self:RequestFocus()
 	self.Target = "self"
@@ -112,15 +101,15 @@ function PANEL:Init()
 	-- id -> target for every run this panel started. Each run channel may keep
 	-- replying (hooks/timers), so we hold them all until the panel is removed, then
 	-- tear them down together.
-	self.ActiveTransfers = {}
+	self.ActiveChannels = {}
 end
 
 function PANEL:OnRemove()
-	for id, target in pairs(self.ActiveTransfers or {}) do
+	for id, target in pairs(self.ActiveChannels or {}) do
 		Noir.Environment.CloseRun(id, target)
 	end
 
-	self.ActiveTransfers = {}
+	self.ActiveChannels = {}
 end
 
 function PANEL:OnSizeChanged(newWidth, newHeight)
@@ -481,14 +470,13 @@ function PANEL:OnCode(code)
 
 	self.totalRan = 0
 	self.hasError = false
-	self.lastTransfer = id
-	self.ActiveTransfers[id] = self.Target
+	self.lastChannel = id
+	self.ActiveChannels[id] = self.Target
 	Noir.Environment.RegisterHandler(function(...)
-		local succ, err = pcall(self.OnMessage, self, self.Target, identifier, ...)
-		if not succ then self:AppendText(Format("--[[%s: Could not display output]] %s", identifier, err)) end
+		Noir.Utils.ForwardPanelMessage(self, self.Target, identifier, ...)
 	end, id)
 
-	local succ, err = pcall(Noir.SendCode, code, identifier, self.Target, id)
+	local succ, err = pcall(Noir.SendCode, code, self.Target, identifier, id)
 	if not succ then
 		self:SetStatus(Format("Error: %s", err), Color(150, 0, 0), true)
 		-- No run result will arrive; this failure is the command's answer.
@@ -498,10 +486,9 @@ function PANEL:OnCode(code)
 	self:UpdateCOH()
 end
 
-function PANEL:OnRunResult(identifier, sender, transferId, results)
-	if transferId ~= self.lastTransfer then return end
+function PANEL:OnRunResult(identifier, sender, channelId, done, returns)
+	if channelId ~= self.lastChannel then return end
 	self.totalRan = self.totalRan + 1
-	local done, returns = unpack(results)
 	local senderName = sender == Entity(0) and "SERVER" or tostring(sender)
 	if not done then
 		self.hasError = true
@@ -523,20 +510,26 @@ function PANEL:OnRunResult(identifier, sender, transferId, results)
 	self:UpdateCOH()
 end
 
-function PANEL:OnMessage(target, replName, sender, transferId, message, messageBody)
+function PANEL:OnMessage(target, replName, sender, channelId, message, messageBody)
 	local isRunResult = message == "run"
 	if isRunResult then
-		local runResults = util.JSONToTable(messageBody)
-		self:OnRunResult(replName, sender, transferId, runResults)
-		message = runResults[1] == false and "ERROR" or "return"
-		messageBody = runResults[2]
+		local done, returns, ok = Noir.Environment.DecodeRunResult(messageBody)
+		-- A "run" frame is always JSON; a decode failure means a corrupt/hostile
+		-- frame, so surface it rather than feeding nil into string.find below.
+		if not ok then
+			message, messageBody = "ERROR", "-- malformed run result"
+		else
+			self:OnRunResult(replName, sender, channelId, done, returns)
+			message = done == false and "ERROR" or "return"
+			messageBody = returns
+		end
 	end
 
 	if string.find(messageBody, "\n") then messageBody = "\n" .. messageBody end
 
 	-- The run result of a command typed into this panel is its answer; script
 	-- output (print/Msg) and results relayed from editor runs are plain output.
-	local isAnswer = isRunResult and transferId == self.lastTransfer
+	local isAnswer = isRunResult and channelId == self.lastChannel
 
 	-- Always tag output with a colored realm indicator so you can tell which realm
 	-- produced each line: "SELF" for a self run, otherwise SERVER / CLIENT / a
@@ -621,23 +614,11 @@ function PANEL:AppendColoredAnswer(segments)
 end
 
 function PANEL:SetupHTML()
+	self.URL = Noir.Utils.MonacoURL("repl.html")
 	self.HTMLPanel:OpenURL(self.URL)
 	self.HTMLPanel:RunJavascript(Noir.JSRuntime)
 	self:AddJSCallback("OnReady")
-	self.HTMLPanel:AddFunction("console", "log", function(...)
-		Noir.Debug("console.log", ...)
-		self:OnLog(...)
-	end)
-
-	self.HTMLPanel:AddFunction("console", "warn", function(...)
-		Noir.Debug("console.warn", ...)
-		self:OnLog(...)
-	end)
-
-	self.HTMLPanel:AddFunction("console", "debug", function(...) Noir.Debug("console.debug", ...) end)
-	self.HTMLPanel:AddFunction("console", "error", function(...)
-		Noir.Error("[", Color(0, 0, 150), "Editor", Color(255, 255, 255), "] ", ..., "\n")
-	end)
+	Noir.Utils.WireHTMLConsole(self.HTMLPanel, function(...) self:OnLog(...) end)
 	self.HTMLPanel:AddFunction("replinterface", "OpenURL", function(url)
 		Noir.Debug("OpenURL", url)
 		if self.OnOpenURL then
@@ -662,14 +643,7 @@ end
 function PANEL:UpdateCOH()
 	if not coh then return end
 	local cohText = Format("%d repls so far\n%s", self.ReplCounter or 0, self.status or "Status uknown")
-	local maxLineLen = 0
-	for _, line in pairs(string.Split(cohText, "\n")) do
-		maxLineLen = math.max(maxLineLen, string.len(line))
-	end
-
-	local indentSize = math.ceil(maxLineLen / 2)
-	cohText = string.rep(" ", indentSize) .. "[Noir Console]" .. string.rep(" ", indentSize) .. "\n" .. cohText
-	coh.SendTypedMessage(cohText)
+	coh.SendTypedMessage(Noir.Utils.CenterCOHTitle(cohText, "[Noir Console]"))
 end
 
 -- Register as VGUI component for use in editor tabs

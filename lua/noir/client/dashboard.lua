@@ -799,431 +799,462 @@ function Dashboard.CreateSettingRow(parent, setting, tabName)
 	return row
 end
 
+-- Per-type control builders. Each takes (parent, setting, tabName, currentValue)
+-- and returns the built panel (or nil). Keyed by setting.type so CreateControl is
+-- a lookup+dispatch instead of a 400-line if/elseif ladder; add a type by adding an
+-- entry here.
+Dashboard.ControlBuilders = {}
+
+Dashboard.ControlBuilders["bool"] = function(parent, setting, tabName, currentValue)
+	local checkbox = vgui.Create("DCheckBox", parent)
+	checkbox:SetSkin("Noir")
+	checkbox:SetChecked(currentValue == true)
+	checkbox.OnChange = function(_, val) Dashboard.Set(tabName, setting.key, val) end
+	return checkbox
+end
+
+Dashboard.ControlBuilders["number"] = function(parent, setting, tabName, currentValue)
+	local wang = vgui.Create("DNumberWang", parent)
+	wang:SetSkin("Noir")
+	wang:SetMin(setting.min or -999999)
+	wang:SetMax(setting.max or 999999)
+	wang:SetDecimals(setting.decimals or 0)
+	wang:SetValue(currentValue or 0)
+	wang.OnValueChanged = function(_, val) Dashboard.Set(tabName, setting.key, val) end
+	return wang
+end
+
+Dashboard.ControlBuilders["string"] = function(parent, setting, tabName, currentValue)
+	local entry = vgui.Create("DTextEntry", parent)
+	entry:SetSkin("Noir")
+	entry:SetText(currentValue or "")
+	entry.OnChange = function() Dashboard.Set(tabName, setting.key, entry:GetText()) end
+	return entry
+end
+
+Dashboard.ControlBuilders["text"] = function(parent, setting, tabName, currentValue)
+	local entry = vgui.Create("DTextEntry", parent)
+	entry:SetSkin("Noir")
+	entry:SetMultiline(true)
+	entry:SetText(currentValue or "")
+	entry.OnChange = function() Dashboard.Set(tabName, setting.key, entry:GetText()) end
+	return entry
+end
+
+Dashboard.ControlBuilders["slider"] = function(parent, setting, tabName, currentValue)
+	local slider = vgui.Create("DNumSlider", parent)
+	slider:SetSkin("Noir")
+	slider:SetMin(setting.min or 0)
+	slider:SetMax(setting.max or 100)
+	slider:SetDecimals(setting.decimals or 0)
+	slider:SetValue(currentValue or 0)
+	slider:SetText("")
+	slider.Label:SetVisible(false)
+	-- Add track line to the slider
+	if IsValid(slider.Slider) then
+		local oldPaint = slider.Slider.Paint
+		slider.Slider.Paint = function(self, w, h)
+			-- Draw track line
+			local trackY = h / 2
+			surface.SetDrawColor(80, 80, 80)
+			surface.DrawRect(0, trackY - 2, w, 4)
+			surface.SetDrawColor(17, 73, 113)
+			local knobX = self.Knob and self.Knob:GetX() or 0
+			surface.DrawRect(0, trackY - 2, knobX, 4)
+			if oldPaint then oldPaint(self, w, h) end
+		end
+	end
+
+	slider.OnValueChanged = function(_, val) Dashboard.Set(tabName, setting.key, val) end
+	return slider
+end
+
+Dashboard.ControlBuilders["color"] = function(parent, setting, tabName, currentValue)
+	local mixer = vgui.Create("DColorMixer", parent)
+	mixer:SetSkin("Noir")
+	mixer:SetAlphaBar(true)
+	mixer:SetPalette(false)
+	mixer:SetWangs(true)
+	if IsColor(currentValue) then
+		mixer:SetColor(currentValue)
+	else
+		mixer:SetColor(Color(255, 255, 255))
+	end
+
+	mixer.ValueChanged = function(_, col) Dashboard.Set(tabName, setting.key, Color(col.r, col.g, col.b, col.a)) end
+	return mixer
+end
+
+Dashboard.ControlBuilders["dropdown"] = function(parent, setting, tabName, currentValue)
+	local combo = vgui.Create("DComboBox", parent)
+	combo:SetSkin("Noir")
+	combo:SetTextColor(Color(200, 200, 200))
+	local selectedIdx = 1
+	for i, opt in ipairs(setting.options or {}) do
+		combo:AddChoice(opt.label, opt.value)
+		if opt.value == currentValue then selectedIdx = i end
+	end
+
+	combo:ChooseOptionID(selectedIdx)
+	combo.OnSelect = function(_, idx, text, data) Dashboard.Set(tabName, setting.key, data) end
+	return combo
+end
+
+Dashboard.ControlBuilders["keybind"] = function(parent, setting, tabName, currentValue)
+	local binder = vgui.Create("DBinder", parent)
+	binder:SetSkin("Noir")
+	binder:SetValue(currentValue or 0)
+	binder.OnChange = function(_, key) Dashboard.Set(tabName, setting.key, key) end
+	return binder
+end
+
+Dashboard.ControlBuilders["button"] = function(parent, setting, tabName, currentValue)
+	local btn = vgui.Create("DButton", parent)
+	btn:SetSkin("Noir")
+	btn:SetText(setting.label)
+	btn:SetTextColor(Color(200, 200, 200))
+	btn.BackgroundColor = Color(60, 60, 60)
+	btn.HoveredColor = Color(80, 80, 80)
+	btn.DoClick = function()
+		if setting.callback then
+			local ok, err = pcall(setting.callback)
+			if not ok then Noir.Error("Dashboard button callback error: ", err, "\n") end
+		end
+	end
+	return btn
+end
+
+Dashboard.ControlBuilders["entity"] = function(parent, setting, tabName, currentValue)
+	local container = vgui.Create("DPanel", parent)
+	container:SetPaintBackground(false)
+	local displayLabel = vgui.Create("DLabel", container)
+	displayLabel:SetTextColor(Color(200, 200, 200))
+	displayLabel:Dock(LEFT)
+	displayLabel:SetWide(200)
+	local function updateDisplay()
+		local ent = Dashboard.Values[setting.fullKey]
+		if IsValid(ent) then
+			displayLabel:SetText(string.format("[%d] %s", ent:EntIndex(), ent:GetClass()))
+		else
+			displayLabel:SetText("None")
+		end
+	end
+
+	updateDisplay()
+	local clearBtn = vgui.Create("DButton", container)
+	clearBtn:SetSkin("Noir")
+	clearBtn:SetText("Clear")
+	clearBtn:Dock(RIGHT)
+	clearBtn:SetWide(50)
+	clearBtn.BackgroundColor = Color(80, 40, 40)
+	clearBtn.HoveredColor = Color(120, 50, 50)
+	clearBtn.DoClick = function()
+		Dashboard.Set(tabName, setting.key, nil)
+		updateDisplay()
+	end
+
+	local viewBtn = vgui.Create("DButton", container)
+	viewBtn:SetSkin("Noir")
+	viewBtn:SetText("View")
+	viewBtn:Dock(RIGHT)
+	viewBtn:DockMargin(0, 0, 5, 0)
+	viewBtn:SetWide(50)
+	viewBtn.BackgroundColor = Color(60, 60, 60)
+	viewBtn.HoveredColor = Color(80, 80, 80)
+	viewBtn.DoClick = function()
+		local ent = Dashboard.Values[setting.fullKey]
+		if IsValid(ent) then
+			Noir.EntityHighlight.Set(ent)
+			-- Genuine delay: flash the highlight for 2s as a preview, then clear it.
+			timer.Simple(2, function() Noir.EntityHighlight.Clear() end)
+		end
+	end
+
+	local searchBtn = vgui.Create("DButton", container)
+	searchBtn:SetSkin("Noir")
+	searchBtn:SetText("Search")
+	searchBtn:Dock(RIGHT)
+	searchBtn:DockMargin(0, 0, 5, 0)
+	searchBtn:SetWide(60)
+	searchBtn.BackgroundColor = Color(60, 60, 60)
+	searchBtn.HoveredColor = Color(80, 80, 80)
+	searchBtn.DoClick = function()
+		Noir.EntitySelector.Open({
+			title = "Select " .. setting.label,
+			filter = setting.filter,
+			onSelect = function(ent)
+				Dashboard.Set(tabName, setting.key, ent)
+				updateDisplay()
+			end
+		})
+	end
+
+	local pickBtn = vgui.Create("DButton", container)
+	pickBtn:SetSkin("Noir")
+	pickBtn:SetText("Pick")
+	pickBtn:Dock(RIGHT)
+	pickBtn:DockMargin(0, 0, 5, 0)
+	pickBtn:SetWide(50)
+	pickBtn.BackgroundColor = Color(17, 73, 113)
+	pickBtn.HoveredColor = Color(25, 100, 150)
+	pickBtn.DoClick = function()
+		Noir.EntitySelector.StartPickMode({
+			owner = Dashboard.Frame,
+			filter = setting.filter,
+			onSelect = function(ent)
+				Dashboard.Set(tabName, setting.key, ent)
+				updateDisplay()
+				Dashboard.Show()
+			end,
+			onCancel = function() Dashboard.Show() end
+		})
+	end
+	return container
+end
+
+Dashboard.ControlBuilders["list"] = function(parent, setting, tabName, currentValue)
+	local container = vgui.Create("DPanel", parent)
+	container:SetPaintBackground(false)
+	local listView = vgui.Create("DListView", container)
+	listView:SetSkin("Noir")
+	listView:Dock(FILL)
+	listView:SetMultiSelect(false)
+	listView:AddColumn("Value")
+	local function refreshList()
+		listView:Clear()
+		local items = Dashboard.Values[setting.fullKey] or {}
+		for i, item in ipairs(items) do
+			local displayText
+			if setting.displayFormatter then
+				displayText = setting.displayFormatter(item)
+			else
+				displayText = tostring(item)
+			end
+
+			local line = listView:AddLine(displayText)
+			line.ItemIndex = i
+			line.ItemValue = item
+		end
+	end
+
+	refreshList()
+	-- Right click menu
+	listView.OnRowRightClick = function(_, idx, row)
+		local menu = DermaMenu()
+		menu:SetSkin("Noir")
+		-- Custom per-item actions. Each action may carry a `submenu` of sub-actions.
+		-- Action callbacks receive (item, index) and mutate the item in place; the
+		-- list is re-saved and refreshed afterwards.
+		local actions = setting.itemActions
+		if isfunction(actions) then actions = actions(row.ItemValue, row.ItemIndex) end
+		if istable(actions) and #actions > 0 then
+			local function runAction(action)
+				if action.callback then action.callback(row.ItemValue, row.ItemIndex) end
+				Dashboard.Set(tabName, setting.key, Dashboard.Values[setting.fullKey] or {})
+				refreshList()
+			end
+
+			for _, action in ipairs(actions) do
+				if istable(action.submenu) then
+					local sub, parentOpt = menu:AddSubMenu(action.label)
+					sub:SetSkin("Noir")
+					if action.icon then parentOpt:SetIcon(action.icon) end
+					for _, subAction in ipairs(action.submenu) do
+						local opt = sub:AddOption(subAction.label, function() runAction(subAction) end)
+						opt:SetIcon(subAction.icon or "icon16/bullet_black.png")
+					end
+				else
+					local opt = menu:AddOption(action.label, function() runAction(action) end)
+					if action.icon then opt:SetIcon(action.icon) end
+				end
+			end
+
+			menu:AddSpacer()
+		end
+
+		menu:AddOption("Remove", function()
+			local items = Dashboard.Values[setting.fullKey] or {}
+			table.remove(items, row.ItemIndex)
+			Dashboard.Set(tabName, setting.key, items)
+			refreshList()
+		end):SetIcon("icon16/cross.png")
+
+		menu:AddSpacer()
+		menu:AddOption("Move Up", function()
+			local items = Dashboard.Values[setting.fullKey] or {}
+			local i = row.ItemIndex
+			if i > 1 then
+				items[i], items[i - 1] = items[i - 1], items[i]
+				Dashboard.Set(tabName, setting.key, items)
+				refreshList()
+			end
+		end):SetIcon("icon16/arrow_up.png")
+
+		menu:AddOption("Move Down", function()
+			local items = Dashboard.Values[setting.fullKey] or {}
+			local i = row.ItemIndex
+			if i < #items then
+				items[i], items[i + 1] = items[i + 1], items[i]
+				Dashboard.Set(tabName, setting.key, items)
+				refreshList()
+			end
+		end):SetIcon("icon16/arrow_down.png")
+
+		menu:Open()
+	end
+
+	-- Add button with suggest options
+	local addBtn = vgui.Create("DButton", container)
+	addBtn:SetSkin("Noir")
+	addBtn:SetText("+")
+	addBtn:Dock(BOTTOM)
+	addBtn:SetTall(24)
+	addBtn:DockMargin(0, 5, 0, 0)
+	addBtn.BackgroundColor = Color(17, 73, 113)
+	addBtn.HoveredColor = Color(25, 100, 150)
+	addBtn.DoClick = function()
+		local suggestions = setting.suggestOptions
+		if isfunction(suggestions) then suggestions = suggestions() end
+		if istable(suggestions) and #suggestions > 0 then
+			-- Show menu with suggestions
+			local menu = DermaMenu()
+			menu:SetSkin("Noir")
+			menu:AddOption("Custom...", function()
+				Dashboard.ShowListAddDialog(tabName, setting, refreshList)
+			end):SetIcon("icon16/textfield.png")
+			menu:AddSpacer()
+			for _, opt in ipairs(suggestions) do
+				local label, value
+				if istable(opt) then
+					label = opt.label or tostring(opt.value)
+					value = opt.value
+				else
+					label = tostring(opt)
+					value = opt
+				end
+
+				menu:AddOption(label, function()
+					local items = Dashboard.Values[setting.fullKey] or {}
+					table.insert(items, value)
+					Dashboard.Set(tabName, setting.key, items)
+					refreshList()
+				end)
+			end
+
+			menu:Open()
+		else
+			-- Direct input dialog
+			Dashboard.ShowListAddDialog(tabName, setting, refreshList)
+		end
+	end
+	return container
+end
+
+Dashboard.ControlBuilders["vector"] = function(parent, setting, tabName, currentValue)
+	local container = vgui.Create("DPanel", parent)
+	container:SetPaintBackground(false)
+	local vec = isvector(currentValue) and currentValue or Vector(0, 0, 0)
+	-- X input
+	local xLabel = vgui.Create("DLabel", container)
+	xLabel:SetText("X:")
+	xLabel:SetTextColor(Color(200, 200, 200))
+	xLabel:Dock(LEFT)
+	xLabel:SetWide(15)
+	local xEntry = vgui.Create("DNumberWang", container)
+	xEntry:SetSkin("Noir")
+	xEntry:SetMin(-999999)
+	xEntry:SetMax(999999)
+	xEntry:SetDecimals(setting.decimals or 2)
+	xEntry:SetValue(vec.x)
+	xEntry:Dock(LEFT)
+	xEntry:SetWide(70)
+	xEntry:DockMargin(0, 0, 5, 0)
+	-- Y input
+	local yLabel = vgui.Create("DLabel", container)
+	yLabel:SetText("Y:")
+	yLabel:SetTextColor(Color(200, 200, 200))
+	yLabel:Dock(LEFT)
+	yLabel:SetWide(15)
+	local yEntry = vgui.Create("DNumberWang", container)
+	yEntry:SetSkin("Noir")
+	yEntry:SetMin(-999999)
+	yEntry:SetMax(999999)
+	yEntry:SetDecimals(setting.decimals or 2)
+	yEntry:SetValue(vec.y)
+	yEntry:Dock(LEFT)
+	yEntry:SetWide(70)
+	yEntry:DockMargin(0, 0, 5, 0)
+	-- Z input
+	local zLabel = vgui.Create("DLabel", container)
+	zLabel:SetText("Z:")
+	zLabel:SetTextColor(Color(200, 200, 200))
+	zLabel:Dock(LEFT)
+	zLabel:SetWide(15)
+	local zEntry = vgui.Create("DNumberWang", container)
+	zEntry:SetSkin("Noir")
+	zEntry:SetMin(-999999)
+	zEntry:SetMax(999999)
+	zEntry:SetDecimals(setting.decimals or 2)
+	zEntry:SetValue(vec.z)
+	zEntry:Dock(LEFT)
+	zEntry:SetWide(70)
+	zEntry:DockMargin(0, 0, 10, 0)
+	local function updateValue()
+		local newVec = Vector(xEntry:GetValue(), yEntry:GetValue(), zEntry:GetValue())
+		Dashboard.Set(tabName, setting.key, newVec)
+	end
+
+	xEntry.OnValueChanged = function() updateValue() end
+	yEntry.OnValueChanged = function() updateValue() end
+	zEntry.OnValueChanged = function() updateValue() end
+	local function setVector(newVec)
+		xEntry:SetValue(newVec.x)
+		yEntry:SetValue(newVec.y)
+		zEntry:SetValue(newVec.z)
+		updateValue()
+	end
+
+	-- Get player position button
+	local getPosBtn = vgui.Create("DButton", container)
+	getPosBtn:SetSkin("Noir")
+	getPosBtn:SetText("Get Pos")
+	getPosBtn:SetTooltip("Set to your current position")
+	getPosBtn:Dock(LEFT)
+	getPosBtn:SetWide(55)
+	getPosBtn:DockMargin(0, 3, 5, 3)
+	getPosBtn.BackgroundColor = Color(60, 60, 60)
+	getPosBtn.HoveredColor = Color(80, 80, 80)
+	getPosBtn.DoClick = function()
+		local ply = LocalPlayer()
+		if IsValid(ply) then setVector(ply:GetPos()) end
+	end
+
+	-- Pick position from world button
+	local pickBtn = vgui.Create("DButton", container)
+	pickBtn:SetSkin("Noir")
+	pickBtn:SetText("Pick")
+	pickBtn:SetTooltip("Click a position in the world")
+	pickBtn:Dock(LEFT)
+	pickBtn:SetWide(40)
+	pickBtn:DockMargin(0, 3, 0, 3)
+	pickBtn.BackgroundColor = Color(17, 73, 113)
+	pickBtn.HoveredColor = Color(25, 100, 150)
+	pickBtn.DoClick = function()
+		Dashboard.Hide()
+		Dashboard.StartVectorPick(function(pos)
+			setVector(pos)
+			Dashboard.Show()
+		end, function() Dashboard.Show() end)
+	end
+	return container
+end
+
 function Dashboard.CreateControl(parent, setting, tabName)
 	local currentValue = Dashboard.Values[setting.fullKey]
 	if currentValue == nil then currentValue = setting.default end
-	if setting.type == "bool" then
-		local checkbox = vgui.Create("DCheckBox", parent)
-		checkbox:SetSkin("Noir")
-		checkbox:SetChecked(currentValue == true)
-		checkbox.OnChange = function(_, val) Dashboard.Set(tabName, setting.key, val) end
-		return checkbox
-	elseif setting.type == "number" then
-		local wang = vgui.Create("DNumberWang", parent)
-		wang:SetSkin("Noir")
-		wang:SetMin(setting.min or -999999)
-		wang:SetMax(setting.max or 999999)
-		wang:SetDecimals(setting.decimals or 0)
-		wang:SetValue(currentValue or 0)
-		wang.OnValueChanged = function(_, val) Dashboard.Set(tabName, setting.key, val) end
-		return wang
-	elseif setting.type == "string" then
-		local entry = vgui.Create("DTextEntry", parent)
-		entry:SetSkin("Noir")
-		entry:SetText(currentValue or "")
-		entry.OnChange = function() Dashboard.Set(tabName, setting.key, entry:GetText()) end
-		return entry
-	elseif setting.type == "text" then
-		local entry = vgui.Create("DTextEntry", parent)
-		entry:SetSkin("Noir")
-		entry:SetMultiline(true)
-		entry:SetText(currentValue or "")
-		entry.OnChange = function() Dashboard.Set(tabName, setting.key, entry:GetText()) end
-		return entry
-	elseif setting.type == "slider" then
-		local slider = vgui.Create("DNumSlider", parent)
-		slider:SetSkin("Noir")
-		slider:SetMin(setting.min or 0)
-		slider:SetMax(setting.max or 100)
-		slider:SetDecimals(setting.decimals or 0)
-		slider:SetValue(currentValue or 0)
-		slider:SetText("")
-		slider.Label:SetVisible(false)
-		-- Add track line to the slider
-		if IsValid(slider.Slider) then
-			local oldPaint = slider.Slider.Paint
-			slider.Slider.Paint = function(self, w, h)
-				-- Draw track line
-				local trackY = h / 2
-				surface.SetDrawColor(80, 80, 80)
-				surface.DrawRect(0, trackY - 2, w, 4)
-				surface.SetDrawColor(17, 73, 113)
-				local knobX = self.Knob and self.Knob:GetX() or 0
-				surface.DrawRect(0, trackY - 2, knobX, 4)
-				if oldPaint then oldPaint(self, w, h) end
-			end
-		end
-
-		slider.OnValueChanged = function(_, val) Dashboard.Set(tabName, setting.key, val) end
-		return slider
-	elseif setting.type == "color" then
-		local mixer = vgui.Create("DColorMixer", parent)
-		mixer:SetSkin("Noir")
-		mixer:SetAlphaBar(true)
-		mixer:SetPalette(false)
-		mixer:SetWangs(true)
-		if IsColor(currentValue) then
-			mixer:SetColor(currentValue)
-		else
-			mixer:SetColor(Color(255, 255, 255))
-		end
-
-		mixer.ValueChanged = function(_, col) Dashboard.Set(tabName, setting.key, Color(col.r, col.g, col.b, col.a)) end
-		return mixer
-	elseif setting.type == "dropdown" then
-		local combo = vgui.Create("DComboBox", parent)
-		combo:SetSkin("Noir")
-		combo:SetTextColor(Color(200, 200, 200))
-		local selectedIdx = 1
-		for i, opt in ipairs(setting.options or {}) do
-			combo:AddChoice(opt.label, opt.value)
-			if opt.value == currentValue then selectedIdx = i end
-		end
-
-		combo:ChooseOptionID(selectedIdx)
-		combo.OnSelect = function(_, idx, text, data) Dashboard.Set(tabName, setting.key, data) end
-		return combo
-	elseif setting.type == "keybind" then
-		local binder = vgui.Create("DBinder", parent)
-		binder:SetSkin("Noir")
-		binder:SetValue(currentValue or 0)
-		binder.OnChange = function(_, key) Dashboard.Set(tabName, setting.key, key) end
-		return binder
-	elseif setting.type == "button" then
-		local btn = vgui.Create("DButton", parent)
-		btn:SetSkin("Noir")
-		btn:SetText(setting.label)
-		btn:SetTextColor(Color(200, 200, 200))
-		btn.BackgroundColor = Color(60, 60, 60)
-		btn.HoveredColor = Color(80, 80, 80)
-		btn.DoClick = function()
-			if setting.callback then
-				local ok, err = pcall(setting.callback)
-				if not ok then Noir.Error("Dashboard button callback error: ", err, "\n") end
-			end
-		end
-		return btn
-	elseif setting.type == "entity" then
-		local container = vgui.Create("DPanel", parent)
-		container:SetPaintBackground(false)
-		local displayLabel = vgui.Create("DLabel", container)
-		displayLabel:SetTextColor(Color(200, 200, 200))
-		displayLabel:Dock(LEFT)
-		displayLabel:SetWide(200)
-		local function updateDisplay()
-			local ent = Dashboard.Values[setting.fullKey]
-			if IsValid(ent) then
-				displayLabel:SetText(string.format("[%d] %s", ent:EntIndex(), ent:GetClass()))
-			else
-				displayLabel:SetText("None")
-			end
-		end
-
-		updateDisplay()
-		local clearBtn = vgui.Create("DButton", container)
-		clearBtn:SetSkin("Noir")
-		clearBtn:SetText("Clear")
-		clearBtn:Dock(RIGHT)
-		clearBtn:SetWide(50)
-		clearBtn.BackgroundColor = Color(80, 40, 40)
-		clearBtn.HoveredColor = Color(120, 50, 50)
-		clearBtn.DoClick = function()
-			Dashboard.Set(tabName, setting.key, nil)
-			updateDisplay()
-		end
-
-		local viewBtn = vgui.Create("DButton", container)
-		viewBtn:SetSkin("Noir")
-		viewBtn:SetText("View")
-		viewBtn:Dock(RIGHT)
-		viewBtn:DockMargin(0, 0, 5, 0)
-		viewBtn:SetWide(50)
-		viewBtn.BackgroundColor = Color(60, 60, 60)
-		viewBtn.HoveredColor = Color(80, 80, 80)
-		viewBtn.DoClick = function()
-			local ent = Dashboard.Values[setting.fullKey]
-			if IsValid(ent) then
-				Noir.EntityHighlight.Set(ent)
-				-- Genuine delay: flash the highlight for 2s as a preview, then clear it.
-				timer.Simple(2, function() Noir.EntityHighlight.Clear() end)
-			end
-		end
-
-		local searchBtn = vgui.Create("DButton", container)
-		searchBtn:SetSkin("Noir")
-		searchBtn:SetText("Search")
-		searchBtn:Dock(RIGHT)
-		searchBtn:DockMargin(0, 0, 5, 0)
-		searchBtn:SetWide(60)
-		searchBtn.BackgroundColor = Color(60, 60, 60)
-		searchBtn.HoveredColor = Color(80, 80, 80)
-		searchBtn.DoClick = function()
-			Noir.EntitySelector.Open({
-				title = "Select " .. setting.label,
-				filter = setting.filter,
-				onSelect = function(ent)
-					Dashboard.Set(tabName, setting.key, ent)
-					updateDisplay()
-				end
-			})
-		end
-
-		local pickBtn = vgui.Create("DButton", container)
-		pickBtn:SetSkin("Noir")
-		pickBtn:SetText("Pick")
-		pickBtn:Dock(RIGHT)
-		pickBtn:DockMargin(0, 0, 5, 0)
-		pickBtn:SetWide(50)
-		pickBtn.BackgroundColor = Color(17, 73, 113)
-		pickBtn.HoveredColor = Color(25, 100, 150)
-		pickBtn.DoClick = function()
-			Noir.EntitySelector.StartPickMode({
-				owner = Dashboard.Frame,
-				filter = setting.filter,
-				onSelect = function(ent)
-					Dashboard.Set(tabName, setting.key, ent)
-					updateDisplay()
-					Dashboard.Show()
-				end,
-				onCancel = function() Dashboard.Show() end
-			})
-		end
-		return container
-	elseif setting.type == "list" then
-		local container = vgui.Create("DPanel", parent)
-		container:SetPaintBackground(false)
-		local listView = vgui.Create("DListView", container)
-		listView:SetSkin("Noir")
-		listView:Dock(FILL)
-		listView:SetMultiSelect(false)
-		listView:AddColumn("Value")
-		local function refreshList()
-			listView:Clear()
-			local items = Dashboard.Values[setting.fullKey] or {}
-			for i, item in ipairs(items) do
-				local displayText
-				if setting.displayFormatter then
-					displayText = setting.displayFormatter(item)
-				else
-					displayText = tostring(item)
-				end
-
-				local line = listView:AddLine(displayText)
-				line.ItemIndex = i
-				line.ItemValue = item
-			end
-		end
-
-		refreshList()
-		-- Right click menu
-		listView.OnRowRightClick = function(_, idx, row)
-			local menu = DermaMenu()
-			menu:SetSkin("Noir")
-			-- Custom per-item actions. Each action may carry a `submenu` of sub-actions.
-			-- Action callbacks receive (item, index) and mutate the item in place; the
-			-- list is re-saved and refreshed afterwards.
-			local actions = setting.itemActions
-			if isfunction(actions) then actions = actions(row.ItemValue, row.ItemIndex) end
-			if istable(actions) and #actions > 0 then
-				local function runAction(action)
-					if action.callback then action.callback(row.ItemValue, row.ItemIndex) end
-					Dashboard.Set(tabName, setting.key, Dashboard.Values[setting.fullKey] or {})
-					refreshList()
-				end
-
-				for _, action in ipairs(actions) do
-					if istable(action.submenu) then
-						local sub, parentOpt = menu:AddSubMenu(action.label)
-						sub:SetSkin("Noir")
-						if action.icon then parentOpt:SetIcon(action.icon) end
-						for _, subAction in ipairs(action.submenu) do
-							local opt = sub:AddOption(subAction.label, function() runAction(subAction) end)
-							opt:SetIcon(subAction.icon or "icon16/bullet_black.png")
-						end
-					else
-						local opt = menu:AddOption(action.label, function() runAction(action) end)
-						if action.icon then opt:SetIcon(action.icon) end
-					end
-				end
-
-				menu:AddSpacer()
-			end
-
-			menu:AddOption("Remove", function()
-				local items = Dashboard.Values[setting.fullKey] or {}
-				table.remove(items, row.ItemIndex)
-				Dashboard.Set(tabName, setting.key, items)
-				refreshList()
-			end):SetIcon("icon16/cross.png")
-
-			menu:AddSpacer()
-			menu:AddOption("Move Up", function()
-				local items = Dashboard.Values[setting.fullKey] or {}
-				local i = row.ItemIndex
-				if i > 1 then
-					items[i], items[i - 1] = items[i - 1], items[i]
-					Dashboard.Set(tabName, setting.key, items)
-					refreshList()
-				end
-			end):SetIcon("icon16/arrow_up.png")
-
-			menu:AddOption("Move Down", function()
-				local items = Dashboard.Values[setting.fullKey] or {}
-				local i = row.ItemIndex
-				if i < #items then
-					items[i], items[i + 1] = items[i + 1], items[i]
-					Dashboard.Set(tabName, setting.key, items)
-					refreshList()
-				end
-			end):SetIcon("icon16/arrow_down.png")
-
-			menu:Open()
-		end
-
-		-- Add button with suggest options
-		local addBtn = vgui.Create("DButton", container)
-		addBtn:SetSkin("Noir")
-		addBtn:SetText("+")
-		addBtn:Dock(BOTTOM)
-		addBtn:SetTall(24)
-		addBtn:DockMargin(0, 5, 0, 0)
-		addBtn.BackgroundColor = Color(17, 73, 113)
-		addBtn.HoveredColor = Color(25, 100, 150)
-		addBtn.DoClick = function()
-			local suggestions = setting.suggestOptions
-			if isfunction(suggestions) then suggestions = suggestions() end
-			if istable(suggestions) and #suggestions > 0 then
-				-- Show menu with suggestions
-				local menu = DermaMenu()
-				menu:SetSkin("Noir")
-				menu:AddOption("Custom...", function()
-					Dashboard.ShowListAddDialog(tabName, setting, refreshList)
-				end):SetIcon("icon16/textfield.png")
-				menu:AddSpacer()
-				for _, opt in ipairs(suggestions) do
-					local label, value
-					if istable(opt) then
-						label = opt.label or tostring(opt.value)
-						value = opt.value
-					else
-						label = tostring(opt)
-						value = opt
-					end
-
-					menu:AddOption(label, function()
-						local items = Dashboard.Values[setting.fullKey] or {}
-						table.insert(items, value)
-						Dashboard.Set(tabName, setting.key, items)
-						refreshList()
-					end)
-				end
-
-				menu:Open()
-			else
-				-- Direct input dialog
-				Dashboard.ShowListAddDialog(tabName, setting, refreshList)
-			end
-		end
-		return container
-	elseif setting.type == "vector" then
-		local container = vgui.Create("DPanel", parent)
-		container:SetPaintBackground(false)
-		local vec = isvector(currentValue) and currentValue or Vector(0, 0, 0)
-		-- X input
-		local xLabel = vgui.Create("DLabel", container)
-		xLabel:SetText("X:")
-		xLabel:SetTextColor(Color(200, 200, 200))
-		xLabel:Dock(LEFT)
-		xLabel:SetWide(15)
-		local xEntry = vgui.Create("DNumberWang", container)
-		xEntry:SetSkin("Noir")
-		xEntry:SetMin(-999999)
-		xEntry:SetMax(999999)
-		xEntry:SetDecimals(setting.decimals or 2)
-		xEntry:SetValue(vec.x)
-		xEntry:Dock(LEFT)
-		xEntry:SetWide(70)
-		xEntry:DockMargin(0, 0, 5, 0)
-		-- Y input
-		local yLabel = vgui.Create("DLabel", container)
-		yLabel:SetText("Y:")
-		yLabel:SetTextColor(Color(200, 200, 200))
-		yLabel:Dock(LEFT)
-		yLabel:SetWide(15)
-		local yEntry = vgui.Create("DNumberWang", container)
-		yEntry:SetSkin("Noir")
-		yEntry:SetMin(-999999)
-		yEntry:SetMax(999999)
-		yEntry:SetDecimals(setting.decimals or 2)
-		yEntry:SetValue(vec.y)
-		yEntry:Dock(LEFT)
-		yEntry:SetWide(70)
-		yEntry:DockMargin(0, 0, 5, 0)
-		-- Z input
-		local zLabel = vgui.Create("DLabel", container)
-		zLabel:SetText("Z:")
-		zLabel:SetTextColor(Color(200, 200, 200))
-		zLabel:Dock(LEFT)
-		zLabel:SetWide(15)
-		local zEntry = vgui.Create("DNumberWang", container)
-		zEntry:SetSkin("Noir")
-		zEntry:SetMin(-999999)
-		zEntry:SetMax(999999)
-		zEntry:SetDecimals(setting.decimals or 2)
-		zEntry:SetValue(vec.z)
-		zEntry:Dock(LEFT)
-		zEntry:SetWide(70)
-		zEntry:DockMargin(0, 0, 10, 0)
-		local function updateValue()
-			local newVec = Vector(xEntry:GetValue(), yEntry:GetValue(), zEntry:GetValue())
-			Dashboard.Set(tabName, setting.key, newVec)
-		end
-
-		xEntry.OnValueChanged = function() updateValue() end
-		yEntry.OnValueChanged = function() updateValue() end
-		zEntry.OnValueChanged = function() updateValue() end
-		local function setVector(newVec)
-			xEntry:SetValue(newVec.x)
-			yEntry:SetValue(newVec.y)
-			zEntry:SetValue(newVec.z)
-			updateValue()
-		end
-
-		-- Get player position button
-		local getPosBtn = vgui.Create("DButton", container)
-		getPosBtn:SetSkin("Noir")
-		getPosBtn:SetText("Get Pos")
-		getPosBtn:SetTooltip("Set to your current position")
-		getPosBtn:Dock(LEFT)
-		getPosBtn:SetWide(55)
-		getPosBtn:DockMargin(0, 3, 5, 3)
-		getPosBtn.BackgroundColor = Color(60, 60, 60)
-		getPosBtn.HoveredColor = Color(80, 80, 80)
-		getPosBtn.DoClick = function()
-			local ply = LocalPlayer()
-			if IsValid(ply) then setVector(ply:GetPos()) end
-		end
-
-		-- Pick position from world button
-		local pickBtn = vgui.Create("DButton", container)
-		pickBtn:SetSkin("Noir")
-		pickBtn:SetText("Pick")
-		pickBtn:SetTooltip("Click a position in the world")
-		pickBtn:Dock(LEFT)
-		pickBtn:SetWide(40)
-		pickBtn:DockMargin(0, 3, 0, 3)
-		pickBtn.BackgroundColor = Color(17, 73, 113)
-		pickBtn.HoveredColor = Color(25, 100, 150)
-		pickBtn.DoClick = function()
-			Dashboard.Hide()
-			Dashboard.StartVectorPick(function(pos)
-				setVector(pos)
-				Dashboard.Show()
-			end, function() Dashboard.Show() end)
-		end
-		return container
-	end
-	return nil
+	local builder = Dashboard.ControlBuilders[setting.type]
+	if not builder then return nil end
+	return builder(parent, setting, tabName, currentValue)
 end
 
 -- Helper for list add dialog

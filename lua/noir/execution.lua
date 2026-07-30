@@ -74,8 +74,8 @@ function Noir.EvalCode(code, identifier, runner)
 end
 
 -- Log a code relay/run as "<verb> code(id): identifier [from => to]".
-local function logRun(verb, sender, transferId, data)
-	Noir.Msg(verb .. " code(", Color(0, 120, 205), transferId, Color(255, 255, 255), "): ", -- ):
+local function logRun(verb, sender, channelId, data)
+	Noir.Msg(verb .. " code(", Color(0, 120, 205), channelId, Color(255, 255, 255), "): ", -- ):
 		Color(230, 220, 115), data.identifier,
 		Color(255, 255, 255), " [",
 		Color(0, 150, 0), sender == Entity(0) and "(SERVER)" or sender:Nick() .. "(" .. sender:SteamID() .. ")",
@@ -89,10 +89,10 @@ end
 local FindJobs = {}
 
 -- Run `code` in a fresh context for `runner` and reply with the formatted result
--- on `transferId` (`data` carries the output-format opts). Shared by the local
+-- on `channelId` (`data` carries the output-format opts). Shared by the local
 -- "self" path and the channel receive handler.
-local function runAndReply(runner, transferId, code, identifier, vars, data)
-	local context = Noir.Environment.CreateContext(runner, transferId, vars)
+local function runAndReply(runner, channelId, code, identifier, vars, data)
+	local context = Noir.Environment.CreateContext(runner, channelId, vars)
 
 	-- SWEP/SENT auto-mode: the client flags the run's ent type (data.entType), so we
 	-- wrap the body in the easylua-style Start/End and the user only writes the
@@ -129,8 +129,8 @@ local function runAndReply(runner, transferId, code, identifier, vars, data)
 	-- verbatim (opts.preformatted short-circuits FormatLong).
 	if done and data.find then
 		local job = Noir.Format.DeepFindAsync(returns[1], data, function(text)
-			FindJobs[transferId] = nil
-			Noir.Environment.SendMessage(runner, transferId, "run", {true, {text}, opts = {preformatted = true}})
+			FindJobs[channelId] = nil
+			Noir.Environment.SendMessage(runner, channelId, "run", {true, {text}, opts = {preformatted = true}})
 		end)
 
 		-- A job means the walk is running in the background (a non-table root replies
@@ -138,8 +138,8 @@ local function runAndReply(runner, transferId, code, identifier, vars, data)
 		-- status as plain output -- it shows the search is ongoing without consuming the
 		-- run's answer, so the real result still lands as the answer when it completes.
 		if job then
-			FindJobs[transferId] = job
-			Noir.Environment.SendMessage(runner, transferId, "searching", {
+			FindJobs[channelId] = job
+			Noir.Environment.SendMessage(runner, channelId, "searching", {
 				Format("-- searching for %q ...", data.find),
 				opts = {preformatted = true}
 			})
@@ -149,7 +149,7 @@ local function runAndReply(runner, transferId, code, identifier, vars, data)
 	end
 
 	if not done and not isstring(returns) then returns = Noir.Format.FormatLong(returns, 0, data) end
-	Noir.Environment.SendMessage(runner, transferId, "run", {
+	Noir.Environment.SendMessage(runner, channelId, "run", {
 		done,
 		returns,
 		opts = data
@@ -161,16 +161,63 @@ local function runAndReply(runner, transferId, code, identifier, vars, data)
 	end
 end
 
-function Noir.SendCode(code, identifier, target, transferId, opts)
+-- Deep-find flag table (see parseOutputFlags). The base --find is a case-insensitive
+-- Lua-pattern search over keys+values (the intuitive default); --findre is an explicit
+-- alias and --findfre does the same over function bodies (string constants, upvalue
+-- names/values, parameter names). The literal (plain-substring) variants are
+-- --findi/--find[k|v|f] and their "i" (case-insensitive) forms. More specific flags
+-- first so prefixes (e.g. --find) don't shadow them.
+local FIND_SPECS = {
+	{flag = "findfre", keys = false, values = false, funcs = true, insensitive = true, pattern = true},
+	{flag = "findre", keys = true, values = true, funcs = false, insensitive = true, pattern = true},
+	{flag = "findki", keys = true, values = false, funcs = false, insensitive = true},
+	{flag = "findvi", keys = false, values = true, funcs = false, insensitive = true},
+	{flag = "findfi", keys = false, values = false, funcs = true, insensitive = true},
+	{flag = "findk", keys = true, values = false, funcs = false, insensitive = false},
+	{flag = "findv", keys = false, values = true, funcs = false, insensitive = false},
+	{flag = "findf", keys = false, values = false, funcs = true, insensitive = false},
+	{flag = "findi", keys = true, values = true, funcs = false, insensitive = true},
+	-- Default find is pattern + case-insensitive; use the literal variants for plain substrings.
+	{flag = "find", keys = true, values = true, funcs = false, insensitive = true, pattern = true},
+}
+
+-- Parse the REPL output-format directives (--full/--shallow/--keys/--values/--depth)
+-- and the deep-find flags out of the code string, writing them onto the run `data`
+-- table. Kept separate from SendCode's channel dispatch so the directive grammar
+-- lives in one place. The find term is the next whitespace-delimited token, matched
+-- against the case-preserved code.
+local function parseOutputFlags(code, data)
+	local lowerCode = string.lower(code)
+	if string.find(lowerCode, "%-%-full") then data.full = true end
+	if string.find(lowerCode, "%-%-shallow") then data.shallow = true end
+	if string.find(lowerCode, "%-%-keys") then data.keys = true end
+	if string.find(lowerCode, "%-%-values") then data.values = true end
+	local depthMatch = string.match(lowerCode, "%-%-depth%s+(%d+)")
+	if depthMatch then data.depth = tonumber(depthMatch) end
+
+	for _, spec in ipairs(FIND_SPECS) do
+		local term = string.match(code, "%-%-" .. spec.flag .. "%s+(%S+)")
+		if term then
+			data.find = term
+			data.findKeys = spec.keys
+			data.findValues = spec.values
+			data.findFuncs = spec.funcs
+			data.findInsensitive = spec.insensitive
+			data.findPattern = spec.pattern
+			break
+		end
+	end
+end
+
+function Noir.SendCode(code, target, identifier, channelId, opts)
 	if util.NetworkStringToID(Noir.Network.Tag) == 0 and target ~= "self" then
 		Noir.ErrorT("This server does not seem to run Noir")
-		return
 	end
 
 	-- Ensure a run channel exists for this id (callers normally OpenChannel first to
 	-- register handlers; this covers direct/self callers). Output flows back on it.
-	transferId = transferId or Noir.Network.OpenChannel("runCode", target)
-	local ch = Noir.Network.ensureRecord(transferId, {
+	channelId = channelId or Noir.Network.OpenChannel("runCode", target)
+	local ch = Noir.Network.EnsureRecord(channelId, {
 		type = "runCode",
 		target = target,
 		opener = SERVER and Entity(0) or LocalPlayer(),
@@ -185,9 +232,7 @@ function Noir.SendCode(code, identifier, target, transferId, opts)
 		vars = Noir.Environment.MakeVars()
 	}
 
-	if CLIENT and Noir.Dashboard then
-		data.sortMode = Noir.Dashboard.Get("Output", "tableSort")
-	end
+	data.sortMode = Noir.Format.GetOutputSettings().sortMode
 
 	-- SWEP/SENT auto-mode: an explicit flag set by the caller (the editor knows a tab's
 	-- type). Rides to the target realm, where runAndReply wraps the body in Start/End.
@@ -197,138 +242,36 @@ function Noir.SendCode(code, identifier, target, transferId, opts)
 		data.spawn = opts.spawn and true or false
 	end
 
-	-- Parse output format flags
-	local lowerCode = string.lower(code)
-	if string.find(lowerCode, "%-%-full") then data.full = true end
-	if string.find(lowerCode, "%-%-shallow") then data.shallow = true end
-	if string.find(lowerCode, "%-%-keys") then data.keys = true end
-	if string.find(lowerCode, "%-%-values") then data.values = true end
-	local depthMatch = string.match(lowerCode, "%-%-depth%s+(%d+)")
-	if depthMatch then data.depth = tonumber(depthMatch) end
-	-- Parse deep-find flags. The base --find is a case-insensitive Lua-pattern search over
-	-- keys+values (the intuitive default); --findre is an explicit alias and --findfre does
-	-- the same over function bodies (string constants, upvalue names/values, parameter
-	-- names). The literal (plain-substring) variants are --findi/--find[k|v|f] and their "i"
-	-- (case-insensitive) forms --find[k|v|f]i. The search term is the next whitespace-
-	-- delimited token (matched against the original case-preserved code). More specific
-	-- flags first so prefixes (e.g. --find) don't shadow them.
-	local findSpecs = {
-		{
-			flag = "findfre",
-			keys = false,
-			values = false,
-			funcs = true,
-			insensitive = true,
-			pattern = true
-		},
-		{
-			flag = "findre",
-			keys = true,
-			values = true,
-			funcs = false,
-			insensitive = true,
-			pattern = true
-		},
-		{
-			flag = "findki",
-			keys = true,
-			values = false,
-			funcs = false,
-			insensitive = true
-		},
-		{
-			flag = "findvi",
-			keys = false,
-			values = true,
-			funcs = false,
-			insensitive = true
-		},
-		{
-			flag = "findfi",
-			keys = false,
-			values = false,
-			funcs = true,
-			insensitive = true
-		},
-		{
-			flag = "findk",
-			keys = true,
-			values = false,
-			funcs = false,
-			insensitive = false
-		},
-		{
-			flag = "findv",
-			keys = false,
-			values = true,
-			funcs = false,
-			insensitive = false
-		},
-		{
-			flag = "findf",
-			keys = false,
-			values = false,
-			funcs = true,
-			insensitive = false
-		},
-		{
-			flag = "findi",
-			keys = true,
-			values = true,
-			funcs = false,
-			insensitive = true
-		},
-		{
-			-- Default find is pattern + case-insensitive (the intuitive default); use the
-			-- literal variants (--findi / --findk / ...) when you need a plain substring.
-			flag = "find",
-			keys = true,
-			values = true,
-			funcs = false,
-			insensitive = true,
-			pattern = true
-		},
-	}
-
-	for _, spec in ipairs(findSpecs) do
-		local term = string.match(code, "%-%-" .. spec.flag .. "%s+(%S+)")
-		if term then
-			data.find = term
-			data.findKeys = spec.keys
-			data.findValues = spec.values
-			data.findFuncs = spec.funcs
-			data.findInsensitive = spec.insensitive
-			data.findPattern = spec.pattern
-			break
-		end
-	end
+	-- Parse the --full/--shallow/--keys/--values/--depth and deep-find directives.
+	parseOutputFlags(code, data)
 
 	-- Ship the client's async-search perf settings with the run so the target realm
 	-- (which runs the walk) uses them; falls back to Format.DeepFindAsync defaults otherwise.
-	if data.find and CLIENT and Noir.Dashboard then
-		data.findBudgetMs = Noir.Dashboard.Get("Search", "frameBudgetMs")
-		data.findMaxResults = Noir.Dashboard.Get("Search", "maxResults")
-		data.findMaxDepth = Noir.Dashboard.Get("Search", "maxDepth")
+	if data.find then
+		local searchSettings = Noir.Format.GetSearchSettings()
+		data.findBudgetMs = searchSettings.frameBudgetMs
+		data.findMaxResults = searchSettings.maxResults
+		data.findMaxDepth = searchSettings.maxDepth
 	end
 
 	-- Track the find so the HUD can surface a long-running one (the walk may run on
 	-- the server, so there's no local job to poll).
 	if data.find and CLIENT and Noir.SearchHUD then
-		Noir.SearchHUD.TrackFind(transferId, identifier)
+		Noir.SearchHUD.TrackFind(channelId, identifier)
 	end
 
 	if target == "self" then
 		local me = SERVER and Entity(0) or LocalPlayer()
-		runAndReply(me, transferId, code, identifier, Noir.Environment.MakeVars(), data)
-		return transferId
+		runAndReply(me, channelId, code, identifier, Noir.Environment.MakeVars(), data)
+		return channelId
 	end
 
 	-- Send the code as the opening message of the run channel. The channel then
 	-- carries the run's output back on the same id, for as long as the run keeps
 	-- replying (hooks/timers), until teardown or disconnect.
 	Noir.Debug("SendCode", data, code)
-	Noir.Network.OpenSend(transferId, code, data)
-	return transferId
+	Noir.Network.OpenSend(channelId, code, data)
+	return channelId
 end
 
 ----------------------------------------------------------------------
@@ -358,17 +301,20 @@ function Noir.Run(code, target, onResult, identifier, opts)
 	if not id then return end
 	if onResult then
 		Noir.Environment.RegisterHandler(function(sender, channelId, _, data)
-			local decoded = util.JSONToTable(data) or {}
+			local done, returns, ok = Noir.Environment.DecodeRunResult(data)
+			-- A run frame is always JSON; a decode failure is a corrupt/hostile frame,
+			-- so surface it as an error result rather than delivering nil silently.
+			if not ok then done, returns = false, "-- malformed run result" end
 			onResult({
 				sender = sender,
-				done = decoded[1],
-				returns = decoded[2],
+				done = done,
+				returns = returns,
 				channelId = channelId
 			})
 		end, id, "run")
 	end
 
-	Noir.SendCode(code, identifier, target, id, opts)
+	Noir.SendCode(code, target, identifier, id, opts)
 	return id
 end
 
@@ -383,27 +329,27 @@ function Noir.RunOnClient(code, ply, onResult, identifier) return Noir.Run(code,
 Noir.Network.ChannelHandlers["runCode"] = {
 	-- Server-side hook when a runCode open is received/relayed: inject server-only
 	-- vars into the (about-to-be-forwarded) data and log the relay.
-	serverOpen = function(sender, transferId, data)
+	serverOpen = function(sender, channelId, data)
 		Noir.Environment.UpdateVarsSV(data)
 		if data.target == "server" then return end
-		logRun("Sending", sender, transferId, data)
+		logRun("Sending", sender, channelId, data)
 	end,
 	-- Any endpoint (target client, or the server for shared/server runs) runs the
 	-- code and replies on the SAME channel. `sender` is the run's initiator (opener),
 	-- so output flows back to whoever started the run.
-	open = function(sender, transferId, data)
-		logRun("Running", sender, transferId, data)
-		runAndReply(sender, transferId, data.string, data.identifier, data.vars, data)
+	open = function(sender, channelId, data)
+		logRun("Running", sender, channelId, data)
+		runAndReply(sender, channelId, data.string, data.identifier, data.vars, data)
 	end,
 	-- Teardown: cancel any in-flight --find walk and free the run context this
 	-- endpoint created (keyed by initiator).
-	close = function(transferId, ch)
-		if FindJobs[transferId] then
-			Noir.TableSearch.CancelJob(FindJobs[transferId])
-			FindJobs[transferId] = nil
+	close = function(channelId, ch)
+		if FindJobs[channelId] then
+			Noir.TableSearch.CancelJob(FindJobs[channelId])
+			FindJobs[channelId] = nil
 		end
 
 		local contexts = Noir.Environment.Contexts[ch.opener]
-		if contexts then contexts[transferId] = nil end
+		if contexts then contexts[channelId] = nil end
 	end
 }

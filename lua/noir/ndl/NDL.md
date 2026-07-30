@@ -134,11 +134,11 @@ Print a formatted traceback (default start level `3`) and return the raw trace i
 
 ## Reflection — `utils.lua`
 
-### `NDL.getlocals(func)  ->  locals, names`
+### `NDL.GetLocals(func)  ->  locals, names`
 `{ name = value }` of a function's locals, plus an ordered `{ name, ... }` list. `nil` values are
 stored as `NIL`.
 
-### `NDL.getupvalues(func)  ->  upvals, names`
+### `NDL.GetUpvalues(func)  ->  upvals, names`
 Same shape, for upvalues.
 
 ### `NDL.AllInfo(func)  ->  { func, info, locals, upvals }`

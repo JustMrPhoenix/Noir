@@ -6,11 +6,11 @@ local function printModule(path)
 	print(str)
 end
 
-function NDL.load()
+function NDL.Load()
 	print("+--------Loading debug library--------+")
 	include("noir/ndl/logging.lua")
 	printModule("ndl/" .. "logging")
-	include("ndl/execution.lua")
+	include("noir/ndl/execution.lua")
 	printModule("ndl/" .. "execution")
 	include("noir/ndl/injection.lua")
 	printModule("ndl/" .. "injection")

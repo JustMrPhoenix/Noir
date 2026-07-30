@@ -2,6 +2,13 @@ local Editor = Noir.Editor or {}
 Noir.Editor = Editor
 Editor.Tab = Editor.Tab or {}
 
+-- Paint the tab close button's "X" (Marlett "r"), with a hover highlight box behind
+-- it. Shared by the two close-button Paint variants (with/without a modified dot).
+local function paintCloseX(btn, w, h)
+	if btn:IsHovered() then draw.RoundedBox(3, 0, 0, w, h, Color(90, 90, 90, btn:GetAlpha())) end
+	draw.DrawText("r", "Marlett", w / 2, 2, Color(255, 255, 255, btn:GetAlpha()), TEXT_ALIGN_CENTER)
+end
+
 -- Register a session in the model, build its content panel via its tab type, and add
 -- its tab-strip button. The single creation path shared by every tab kind's CreateTab
 -- (Editor.Session.Create, Console.CreateTab, Database.CreateTab). The restore path in
@@ -110,8 +117,7 @@ function Editor.Tab.Add(session)
 		-- No modified indicator (bespoke panel tabs): always show X on hover
 		closeButton.Paint = function(_, w, h)
 			if not pnl.IsActive and not pnl:IsHovered() and not closeButton:IsHovered() then return end
-			if closeButton:IsHovered() then draw.RoundedBox(3, 0, 0, w, h, Color(90, 90, 90, closeButton:GetAlpha())) end
-			draw.DrawText("r", "Marlett", w / 2, 2, Color(255, 255, 255, closeButton:GetAlpha()), TEXT_ALIGN_CENTER)
+			paintCloseX(closeButton, w, h)
 			return true
 		end
 	else
@@ -134,8 +140,7 @@ function Editor.Tab.Add(session)
 
 				surface.DrawPoly(poly)
 			else
-				if closeButton:IsHovered() then draw.RoundedBox(3, 0, 0, w, h, Color(90, 90, 90, closeButton:GetAlpha())) end
-				draw.DrawText("r", "Marlett", w / 2, 2, Color(255, 255, 255, closeButton:GetAlpha()), TEXT_ALIGN_CENTER)
+				paintCloseX(closeButton, w, h)
 			end
 
 			return true

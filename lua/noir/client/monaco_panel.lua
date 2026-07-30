@@ -1,6 +1,4 @@
 ﻿local PANEL = {}
--- Since gmod does not allow you to open localhost urls im using loopback.bestboy.moe that points to 127.0.0.1
-PANEL.URL = Noir.DEBUG and "http://loopback.bestboy.moe:8080" or "https://metastruct.github.io/gmod-monaco/"
 PANEL.SHOULD_VALIDATE = true
 PANEL.VALIDATE_COOLDOWN = 0.5
 -- Totally hacky way to rebind command palette to Ctrl+Shift+P like in vs-code
@@ -24,12 +22,7 @@ for _, choice in ipairs(LANGUAGE_CHOICES) do
 	LANGUAGE_LABELS[choice[2]] = choice[1]
 end
 local LANGUAGE_COMBO_WIDTH = 90
-local function addColumn(listView, name)
-	local column = listView:AddColumn(name)
-	column.Header.BackgroundColor = Color(40, 40, 40)
-	column.Header.HoveredColor = Color(70, 70, 70)
-	return column
-end
+local addColumn = Noir.Utils.AddListColumn
 
 function PANEL:Init()
 	self:SetCookieName("NoirLuaEditor")
@@ -69,20 +62,10 @@ function PANEL:Init()
 	-- Bottom-right language selector. Positioned in OnSizeChanged (like the REPL's
 	-- target combobox) so it sits over the status bar's right edge without fighting
 	-- the docked layout.
-	local langCombo = self:Add("DComboBox")
-	langCombo:SetSkin("Noir")
-	langCombo:SetTextColor(Color(200, 200, 200))
-	langCombo:SetSortItems(false)
-	for _, choice in ipairs(LANGUAGE_CHOICES) do
-		langCombo:AddChoice(choice[1], choice[2])
-	end
-
-	langCombo:SetValue("Lua")
-	self.LanguageCombo = langCombo
-	langCombo.OnSelect = function(_, _, _, langId)
+	self.LanguageCombo = Noir.Utils.CreateLanguageCombo(self, LANGUAGE_CHOICES, function(langId)
 		if self.SuppressLangSelect then return end
 		self:SetLanguage(langId)
-	end
+	end)
 
 	self.Language = "glua"
 	self.LanguageData = {}
@@ -405,24 +388,12 @@ function PANEL:SetAlpha(alpha)
 end
 
 function PANEL:SetupHTML()
+	self.URL = Noir.Utils.MonacoURL()
 	self.HTMLPanel:OpenURL(self.URL)
 	self.HTMLPanel:RunJavascript([[window.__noirOrigConsole = { log: console.log, warn: console.warn, debug: console.debug, error: console.error };]])
 	self.HTMLPanel:RunJavascript(Noir.JSRuntime)
 	self:AddJSCallback("OnReady")
-	self.HTMLPanel:AddFunction("console", "log", function(...)
-		Noir.Debug("console.log", ...)
-		self:OnLog(...)
-	end)
-
-	self.HTMLPanel:AddFunction("console", "warn", function(...)
-		Noir.Debug("console.warn", ...)
-		self:OnLog(...)
-	end)
-
-	self.HTMLPanel:AddFunction("console", "debug", function(...) Noir.Debug("console.debug", ...) end)
-	self.HTMLPanel:AddFunction("console", "error", function(...)
-		Noir.Error("[", Color(0, 0, 150), "Editor", Color(255, 255, 255), "] ", ..., "\n")
-	end)
+	Noir.Utils.WireHTMLConsole(self.HTMLPanel, function(...) self:OnLog(...) end)
 	self.HTMLPanel:AddFunction("gmodinterface", "OpenURL", function(url)
 		Noir.Debug("OpenURL", url)
 		if self.OnOpenURL then

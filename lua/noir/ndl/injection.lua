@@ -203,7 +203,15 @@ function NDL.TraceOneCall(targetTbl, funcName, name)
 	end))
 end
 
--- Concommand to restore all funcs in case of big bork
-concommand.Add("ndl_restoreall", NDL.RestoreAllInjects)
+-- Concommand to restore all funcs in case of big bork. Superadmin-gated on the
+-- server like every other state-mutating concommand (these mutate shared server
+-- injection/trace state); client-side invocation only touches the local realm.
+concommand.Add("ndl_restoreall", function(ply)
+	if SERVER and IsValid(ply) and not ply:IsSuperAdmin() then return end
+	NDL.RestoreAllInjects()
+end)
 -- Concommand to drop all retained trace history from memory.
-concommand.Add("ndl_wipetraces", NDL.WipeTraces)
+concommand.Add("ndl_wipetraces", function(ply)
+	if SERVER and IsValid(ply) and not ply:IsSuperAdmin() then return end
+	NDL.WipeTraces()
+end)

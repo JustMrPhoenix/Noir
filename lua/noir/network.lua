@@ -164,7 +164,7 @@ end
 
 -- Fetch-or-create a channel record, merging fields (so an early OnChannel and a
 -- later OpenChannel share one record).
-function Network.ensureRecord(channelId, fields)
+function Network.EnsureRecord(channelId, fields)
 	local ch = Network.Channels[channelId]
 	if not ch then
 		ch = {id = channelId, handlers = {list = {}, byMsg = {}}, onClose = {}, nextSeq = 0}
@@ -181,7 +181,7 @@ end
 -- OnChannel, then OpenSend.
 function Network.OpenChannel(chType, target)
 	local id = Network.GenerateChannelId()
-	Network.ensureRecord(id, {
+	Network.EnsureRecord(id, {
 		type = chType,
 		target = target,
 		opener = SERVER and Entity(0) or LocalPlayer(),
@@ -197,7 +197,7 @@ function Network.OnChannel(channelId, message, callback)
 		message = nil
 	end
 
-	local ch = Network.Channels[channelId] or Network.ensureRecord(channelId, {})
+	local ch = Network.Channels[channelId] or Network.EnsureRecord(channelId, {})
 	if message then
 		ch.handlers.byMsg[message] = ch.handlers.byMsg[message] or {}
 		table.insert(ch.handlers.byMsg[message], callback)
@@ -207,7 +207,7 @@ function Network.OnChannel(channelId, message, callback)
 end
 
 function Network.OnChannelClose(channelId, callback)
-	local ch = Network.Channels[channelId] or Network.ensureRecord(channelId, {})
+	local ch = Network.Channels[channelId] or Network.EnsureRecord(channelId, {})
 	table.insert(ch.onClose, callback)
 end
 
@@ -235,7 +235,7 @@ local function purgeChannelBuffers(channelId)
 	end
 end
 
-function Network.dropChannel(channelId)
+local function dropChannel(channelId)
 	local ch = Network.Channels[channelId]
 	if not ch then return end
 	Network.Channels[channelId] = nil
@@ -250,11 +250,11 @@ end
 -- the channel's instance handlers.
 local function endpointDeliver(sender, channelId, op, message, data)
 	if op == "open" then
-		Network.ensureRecord(channelId, {type = data.type, target = data.target, opener = sender})
+		Network.EnsureRecord(channelId, {type = data.type, target = data.target, opener = sender})
 		local h = Network.ChannelHandlers[data.type]
 		if h and h.open then h.open(sender, channelId, data) end
 		-- Fire-and-forget: no replies expected, drop the record immediately.
-		if h and h.oneshot then Network.dropChannel(channelId) end
+		if h and h.oneshot then dropChannel(channelId) end
 	else
 		Network.DispatchChannel(channelId, sender, message, data)
 	end
@@ -290,12 +290,10 @@ local function assemblyPart(sender, channelId, seq, chunk)
 	Network.Assembly[key] = nil
 	if util.CRC(asm.buf) ~= asm.crc then
 		Noir.ErrorT("Channel CRC mismatch! ", channelId)
-		return
 	end
 
 	if #asm.buf ~= asm.len then
 		Noir.ErrorT("Channel length mismatch! ", channelId)
-		return
 	end
 
 	local data = asm.extra or {}
@@ -394,7 +392,6 @@ function Network.OpenSend(channelId, payload, data)
 	local ch = Network.Channels[channelId]
 	if not ch then
 		Noir.ErrorT("OpenSend: unknown channel ", channelId)
-		return
 	end
 
 	data = data or {}
@@ -410,7 +407,6 @@ function Network.SendOnChannel(channelId, message, payload, target)
 	local ch = Network.Channels[channelId]
 	if not ch then
 		Noir.ErrorT("SendOnChannel: unknown channel ", channelId)
-		return
 	end
 
 	local dst = target
@@ -461,7 +457,7 @@ function Network.CloseChannel(channelId, target)
 		end
 	end
 
-	Network.dropChannel(channelId)
+	dropChannel(channelId)
 end
 
 ----------------------------------------------------------------------
@@ -517,7 +513,7 @@ local function serverHandleQuick(sender, channelId, op, message, extra, payload)
 	local ch = Network.Channels[channelId]
 	if op == "open" then
 		if not Network.CheckAccess(sender, extra.target, {channelOp = "open"}) then return end
-		ch = Network.ensureRecord(channelId, {type = extra.type, target = extra.target, opener = sender})
+		ch = Network.EnsureRecord(channelId, {type = extra.type, target = extra.target, opener = sender})
 		local h = Network.ChannelHandlers[extra.type]
 		if h and h.serverOpen then h.serverOpen(sender, channelId, extra) end
 	elseif not ch or not Network.IsChannelAllowed(sender, channelId) then
@@ -549,7 +545,7 @@ local function serverHandleHeader(sender, channelId, op, message, seq, parts, cr
 			return
 		end
 
-		ch = Network.ensureRecord(channelId, {type = extra.type, target = extra.target, opener = sender})
+		ch = Network.EnsureRecord(channelId, {type = extra.type, target = extra.target, opener = sender})
 		-- Server-side hook when an open is received/relayed: lets a channel type
 		-- augment `extra` before it's forwarded/reassembled (e.g. runCode injects
 		-- server-only vars) and do relay-time logging. Runs before emitHeader below so
@@ -657,13 +653,16 @@ Network.Receivers = {
 			end
 		end
 
-		Network.dropChannel(channelId)
+		dropChannel(channelId)
 	end,
 }
 
 net.Receive(tag, function(len, ply)
 	local sender = SERVER and ply or net.ReadEntity()
-	Network.Receivers[net.ReadUInt(UIntSize)](sender)
+	-- The sub-type is 3 untrusted bits (0-7) but only 0-3 are defined; drop
+	-- malformed/hostile frames rather than indexing nil and erroring here.
+	local receiver = Network.Receivers[net.ReadUInt(UIntSize)]
+	if receiver then receiver(sender) end
 end)
 
 if SERVER then
@@ -673,7 +672,7 @@ if SERVER then
 	hook.Add("PlayerDisconnected", "Noir.Network.Cleanup", function(ply)
 		if not IsValid(ply) then return end
 		for id, ch in pairs(Network.Channels) do
-			if sameEndpoint(ch.opener, ply) or ch.target == ply then Network.dropChannel(id) end
+			if sameEndpoint(ch.opener, ply) or ch.target == ply then dropChannel(id) end
 		end
 
 		local sid = ply:SteamID()

@@ -130,6 +130,7 @@ function Noir.Load()
 	loadModule("client/editor/loading.lua")
 	loadModule("client/editor/frame.lua")
 	loadModule("client/repl.lua")
+	loadModule("client/entity_highlight.lua")
 	loadModule("client/entity_selector.lua")
 	loadModule("client/db_browser.lua")
 	loadModule("client/dashboard.lua")
@@ -137,7 +138,7 @@ function Noir.Load()
 	loadModule("client/search_hud.lua")
 	loadModule("client/autorun.lua")
 	loadModule("ndl/load.lua")
-	NDL.load()
+	NDL.Load()
 	print("|                                     |")
 	print("+----------Loading complete-----------+")
 	Noir.Msg("Loaded!\n")
@@ -161,7 +162,6 @@ if SERVER then
 		AddCSLuaFile("includes/modules/" .. filename)
 	end
 
-	AddCSLuaFile("includes/modules/jit_decompiler.lua")
 	AddCSLuaFile("includes/modules/jit_decompiler2.lua")
 end
 

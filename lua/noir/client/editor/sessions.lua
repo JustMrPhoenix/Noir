@@ -61,7 +61,7 @@ function Editor.Session.Create(sessionName, code, fileData, sessionData)
 		end
 	end
 
-	if Editor.SessionsByName[sessionName] then error("Cant create session, name already taken") end
+	if Editor.SessionsByName[sessionName] then Noir.ErrorT("Cant create session, name already taken") end
 	code = code or ""
 	Noir.Debug("CreateSession", sessionName, code)
 	local session = {
@@ -103,12 +103,12 @@ function Editor.Session.Close(sessionName, nextActive, noSave)
 	local session = Editor.SessionsByName[sessionName]
 	-- Tear down any run channels this session opened: closing the tab is the manual
 	-- teardown point (a run's replies live on until then or until disconnect).
-	if session and session.runTransfers then
-		for id, target in pairs(session.runTransfers) do
+	if session and session.runChannels then
+		for id, target in pairs(session.runChannels) do
 			Noir.Environment.CloseRun(id, target)
 		end
 
-		session.runTransfers = nil
+		session.runChannels = nil
 	end
 
 	-- Closing a file is an interaction too: bump it to the front of recents so
@@ -139,8 +139,7 @@ end
 function Editor.Session.Rename(sessionName, newName)
 	if sessionName == newName then return end
 	if Editor.SessionsByName[newName] then
-		error("Cant rename to '" .. sessionName .. "' name already taken")
-		return
+		Noir.ErrorT("Cant rename to '", newName, "' name already taken")
 	end
 
 	if not Editor.SessionsByName[sessionName] then return end
@@ -270,6 +269,20 @@ function Editor.Session.GetLanguage(fileName)
 	return "plaintext"
 end
 
+-- Pick a session name that doesn't collide with an existing tab: try the bare
+-- filename, then "[path] name", then the full resolved path. `exclude` is a session
+-- allowed to keep its own name (SaveAs re-saving the same tab).
+function Editor.Session.UniqueName(path, name, fileName, exclude)
+	local function taken(n)
+		local existing = Editor.SessionsByName[n]
+		return existing ~= nil and existing ~= exclude
+	end
+
+	if taken(name) then name = Format("[%s] %s", path, name) end
+	if taken(name) then name = Noir.Utils.GetFilePath(path, fileName) end
+	return name
+end
+
 function Editor.OpenFile(path, fileName)
 	path, fileName = Noir.Utils.FixFilePath(path, fileName)
 	for _, v in pairs(Editor.Sessions) do
@@ -287,9 +300,7 @@ function Editor.OpenFile(path, fileName)
 
 	local code = f:Read(f:Size())
 	f:Close()
-	local name = string.GetFileFromFilename(fileName)
-	if Editor.SessionsByName[name] then name = Format("[%s] %s", path, name) end
-	if Editor.SessionsByName[name] then name = Format(Noir.Utils.GetFilePath(path, fileName)) end
+	local name = Editor.Session.UniqueName(path, string.GetFileFromFilename(fileName), fileName)
 	Editor.Session.AddRecent(path, fileName)
 	local lang = Editor.Session.GetLanguage(fileName)
 	Noir.Debug("OpenFile", path, fileName, name)
@@ -356,11 +367,7 @@ function Editor.Session.SaveAs(sessionName, callback)
 		session.file = {"DATA", fullname}
 		session.SavedCode = session.code
 		session.Modified = false
-		local name = string.GetFileFromFilename(fullname)
-		if Editor.SessionsByName[name] and Editor.SessionsByName[name] ~= session then name = Format("[%s] %s", "DATA", name) end
-		if Editor.SessionsByName[name] and Editor.SessionsByName[name] ~= session then
-			name = Format(Noir.Utils.GetFilePath("DATA", fullname))
-		end
+		local name = Editor.Session.UniqueName("DATA", string.GetFileFromFilename(fullname), fullname, session)
 		-- Renaming the session to the saved file's name keeps the tab label in sync;
 		-- Update() then refreshes the tooltip/icon for the (now saved) session.
 		Editor.Session.Rename(session.name, name)

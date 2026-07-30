@@ -49,7 +49,7 @@ Editor.TabTypes.Register(TAB_TYPE, {
 	-- Build the per-session content panel, parented to the editor frame and hidden
 	-- until the tab is activated. Called by Editor.Tab.Open (live create) and by the
 	-- restore loop in frame.lua. Stash the panel on the session so the other hooks can
-	-- find it; Noir strips it (and any *Panel/runTransfers field) from the saved JSON.
+	-- find it; Noir strips it (and any *Panel/runChannels field) from the saved JSON.
 	Build = function(session, parent)
 		if not IsValid(parent) then return end
 		local panel = vgui.Create("DPanel", parent)

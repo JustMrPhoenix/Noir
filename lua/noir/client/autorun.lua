@@ -187,7 +187,7 @@ function Autorun.RunScript(script, callback)
 	end
 
 	-- Server execution
-	if runServer then Noir.SendCode(content, identifier, "server") end
+	if runServer then Noir.SendCode(content, "server", identifier) end
 	if callback then callback(true) end
 	return true
 end

@@ -1,36 +1,33 @@
-﻿function NDL.getlocals(func)
-	local locals = {}
-	local names_only = {}
+﻿-- Walk a function's locals or upvalues via the given debug getter, returning a
+-- {name = value} map and a positional {index = name} list. `getter` is
+-- debug.getlocal or debug.getupvalue; both share this indexed-scan shape.
+local function collect(getter, func)
+	local values = {}
+	local namesOnly = {}
 	local i = 1
 	while true do
-		local name, value = debug.getlocal(func, i)
+		local name, value = getter(func, i)
 		if name == nil then break end
-		locals[name] = value == nil and NIL or value
-		names_only[i] = name
+		values[name] = value == nil and NIL or value
+		namesOnly[i] = name
 		i = i + 1
 	end
-	return locals, names_only
+	return values, namesOnly
 end
 
-function NDL.getupvalues(func)
-	local upvals = {}
-	local names_only = {}
-	local i = 1
-	while true do
-		local name, value = debug.getupvalue(func, i)
-		if name == nil then break end
-		upvals[name] = value == nil and NIL or value
-		names_only[i] = name
-		i = i + 1
-	end
-	return upvals, names_only
+function NDL.GetLocals(func)
+	return collect(debug.getlocal, func)
+end
+
+function NDL.GetUpvalues(func)
+	return collect(debug.getupvalue, func)
 end
 
 function NDL.AllInfo(func)
 	return {
 		func = func,
 		info = debug.getinfo(func),
-		locals = NDL.getlocals(func),
-		upvals = NDL.getupvalues(func)
+		locals = NDL.GetLocals(func),
+		upvals = NDL.GetUpvalues(func)
 	}
 end

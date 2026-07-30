@@ -196,23 +196,9 @@ end
 ----------------------------------------------------------------------
 -- Combo / column helpers
 ----------------------------------------------------------------------
-local function makeCombo(parent, choices, current)
-	local combo = parent:Add("DComboBox")
-	combo:SetSkin("Noir")
-	combo.NoirValue = current
-	for _, c in ipairs(choices) do
-		combo:AddChoice(c.label, c.value, c.value == current)
-	end
+local makeCombo = Noir.Utils.MakeCombo
 
-	combo.OnSelect = function(_, _, _, data) combo.NoirValue = data end
-	return combo
-end
-
-local function addColumn(listView, name, width)
-	local column = listView:AddColumn(name)
-	if width then column:SetWidth(width) end
-	return column
-end
+local addColumn = Noir.Utils.AddListColumn
 
 ----------------------------------------------------------------------
 -- The window content panel.
@@ -650,22 +636,7 @@ function UI.Show()
 		end
 	end
 
-	local frame = vgui.Create("DFrame")
-	frame:SetSkin("Noir")
-	frame:SetMinHeight(300)
-	frame:SetMinWidth(400)
-	frame.lblTitle:SetVisible(false)
-	frame:SetDeleteOnClose(false)
-	frame:SetDraggable(true)
-	frame:SetSizable(true)
-	frame:MakePopup()
-	frame.btnMaxim:SetVisible(false)
-	frame.btnMinim:SetVisible(false)
-	frame.PerformLayout = function()
-		frame.btnClose:SetPos(frame:GetWide() - 31, 0)
-		frame.btnClose:SetSize(31, 24)
-	end
-
+	local frame = Noir.Utils.CreateNoirBorderlessFrame(300, 400)
 	frame:SetSize(1000, 560)
 	frame:Center()
 	frame:SetTitle("Find in Files")

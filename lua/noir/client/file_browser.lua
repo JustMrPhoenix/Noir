@@ -12,12 +12,7 @@ PANEL.AllowedExtensions = {
 	["json"] = true
 }
 
-local function addColumn(listView, name)
-	local column = listView:AddColumn(name)
-	column.Header.BackgroundColor = Color(40, 40, 40)
-	column.Header.HoveredColor = Color(70, 70, 70)
-	return column
-end
+local addColumn = Noir.Utils.AddListColumn
 
 local function AddMenuOption(menu, label, callback, icon)
 	local option = menu:AddOption(label, callback)
@@ -341,21 +336,7 @@ end
 vgui.Register("NoirFileBrowser", PANEL, "EditablePanel")
 Browser.LastFolder = {}
 function Browser.Show(path, startFolder)
-	local frame = vgui.Create("DFrame")
-	frame:SetSkin("Noir")
-	frame:SetMinHeight(300)
-	frame:SetMinWidth(300)
-	frame.lblTitle:SetVisible(false)
-	frame:SetDeleteOnClose(false)
-	frame:SetDraggable(true)
-	frame:SetSizable(true)
-	frame:MakePopup()
-	frame.btnMaxim:SetVisible(false)
-	frame.btnMinim:SetVisible(false)
-	frame.PerformLayout = function()
-		frame.btnClose:SetPos(frame:GetWide() - 31, 0)
-		frame.btnClose:SetSize(31, 24)
-	end
+	local frame = Noir.Utils.CreateNoirBorderlessFrame(300, 300)
 
 	frame:SetSize(600, 400)
 	frame:Center()

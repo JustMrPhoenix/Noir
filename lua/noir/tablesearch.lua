@@ -9,8 +9,8 @@ if TableSearch.CancelAll then TableSearch.CancelAll() end
 ----------------------------------------------------------------------
 -- Async deep table walk. Backs the REPL --find* flags (see output_format.lua's
 -- Format.DeepFindAsync, which supplies the per-node `record` matcher). The walk
--- used to be a synchronous recursion in Format.DeepFind and would freeze the
--- realm it ran on (server or a specific client) for the whole traversal.
+-- used to be a synchronous recursion that would freeze the realm it ran on
+-- (server or a specific client) for the whole traversal.
 --
 -- This engine is a generic, format-agnostic value-tree walker driven off one
 -- Think hook on a per-job per-frame time budget, exactly like FileSearch: it
@@ -22,7 +22,7 @@ if TableSearch.CancelAll then TableSearch.CancelAll() end
 -- We recurse (LuaJIT can yield across nested Lua calls) rather than manage an
 -- explicit stack: walking _G reaches 100k+ tables, and a heap table per node would
 -- flood the GC and stutter the walk. Recursion uses the Lua call stack -- no
--- per-node allocation, matching the old synchronous Format.DeepFind's footprint.
+-- per-node allocation, matching the old synchronous walk's footprint.
 ----------------------------------------------------------------------
 
 TableSearch.DEFAULTS = {

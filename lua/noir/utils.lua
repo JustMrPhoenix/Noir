@@ -5,7 +5,144 @@ function Utils.IsSafeKey(key)
 	for _, v in pairs(badKeyChars) do
 		if string.find(key, v, 1, true) ~= nil then return false end
 	end
-	return tonumber(key[1]) == nil
+	return tonumber(key:sub(1, 1)) == nil
+end
+
+-- Base URL for the Monaco frontend: the loopback dev server in debug mode, the
+-- prod CDN otherwise. Read at call time (panel SetupHTML) so toggling noir_debug
+-- takes effect on the next (re)load rather than being frozen at module load.
+-- `page` is appended to the base (e.g. "repl.html"; "" for the editor root).
+function Utils.MonacoURL(page)
+	-- GMod blocks localhost URLs, so the loopback host points at 127.0.0.1.
+	local base = Noir.DEBUG and "http://loopback.bestboy.moe:8080/" or "https://metastruct.github.io/gmod-monaco/"
+	return base .. (page or "")
+end
+
+-- Create a standard Noir-skinned titled popup window (draggable, sizable, no
+-- minimize/maximize). Centered at the given size. Deleted on close. Shared by the
+-- entity-search and database-browser windows.
+function Utils.CreateNoirWindow(title, w, h)
+	local frame = vgui.Create("DFrame")
+	frame:SetSkin("Noir")
+	frame:SetTitle(title)
+	frame:SetSize(w, h)
+	frame:Center()
+	frame:SetDraggable(true)
+	frame:SetSizable(true)
+	frame:SetDeleteOnClose(true)
+	frame:MakePopup()
+	frame.btnMinim:SetVisible(false)
+	frame.btnMaxim:SetVisible(false)
+	return frame
+end
+
+-- Create a Noir-skinned borderless popup (title label hidden, close button
+-- re-laid-out top-right) that persists across closes. `minW`/`minH` default to 300.
+-- Shared by the file browser and the Find-in-Files window; the caller sets the
+-- initial size/position. See Editor.UI.CreateFrame for the editor's own variant.
+function Utils.CreateNoirBorderlessFrame(minW, minH)
+	local frame = vgui.Create("DFrame")
+	frame:SetSkin("Noir")
+	frame:SetMinWidth(minW or 300)
+	frame:SetMinHeight(minH or 300)
+	frame.lblTitle:SetVisible(false)
+	frame:SetDeleteOnClose(false)
+	frame:SetDraggable(true)
+	frame:SetSizable(true)
+	frame:MakePopup()
+	frame.btnMaxim:SetVisible(false)
+	frame.btnMinim:SetVisible(false)
+	frame.PerformLayout = function()
+		frame.btnClose:SetPos(frame:GetWide() - 31, 0)
+		frame.btnClose:SetSize(31, 24)
+	end
+
+	return frame
+end
+
+-- Build the Noir-skinned bottom-right language selector shared by the editor and
+-- the REPL. `choices` is a list of {label, langId}; onSelect(langId) fires on change.
+function Utils.CreateLanguageCombo(parent, choices, onSelect)
+	local combo = parent:Add("DComboBox")
+	combo:SetSkin("Noir")
+	combo:SetTextColor(Color(200, 200, 200))
+	combo:SetSortItems(false)
+	for _, choice in ipairs(choices) do
+		combo:AddChoice(choice[1], choice[2])
+	end
+
+	combo:SetValue("Lua")
+	combo.OnSelect = function(_, _, _, langId) onSelect(langId) end
+	return combo
+end
+
+-- Prepend a centered title line to a Coherent-overlay status block. Padding is half
+-- the widest line on each side of the title (matches the editor's/REPL's original
+-- layout). Returns the title line + newline + original text.
+function Utils.CenterCOHTitle(text, title)
+	local maxLineLen = 0
+	for _, line in pairs(string.Split(text, "\n")) do
+		maxLineLen = math.max(maxLineLen, string.len(line))
+	end
+
+	local indent = string.rep(" ", math.ceil(maxLineLen / 2))
+	return indent .. title .. indent .. "\n" .. text
+end
+
+-- Forward one run-channel message into a console-style panel (anything with
+-- :OnMessage and :AppendText), guarding the display call so a formatting error in a
+-- single message can't tear down the run handler. Shared by the REPL and the editor
+-- console / Run output paths.
+function Utils.ForwardPanelMessage(panel, target, label, sender, channelId, message, data)
+	local ok, err = pcall(panel.OnMessage, panel, target, label, sender, channelId, message, data)
+	if not ok then panel:AppendText(Format("--[[%s: Could not display output]] %s", label, err)) end
+end
+
+-- Wire the shared console.log/warn/debug/error bridge onto a Monaco DHTML panel:
+-- log/warn mirror to Noir.Debug and route to onLog(...), debug goes to Noir.Debug,
+-- and error prints through Noir.Error. Both the editor and the REPL host it identically.
+function Utils.WireHTMLConsole(htmlPanel, onLog)
+	htmlPanel:AddFunction("console", "log", function(...)
+		Noir.Debug("console.log", ...)
+		onLog(...)
+	end)
+
+	htmlPanel:AddFunction("console", "warn", function(...)
+		Noir.Debug("console.warn", ...)
+		onLog(...)
+	end)
+
+	htmlPanel:AddFunction("console", "debug", function(...) Noir.Debug("console.debug", ...) end)
+	htmlPanel:AddFunction("console", "error", function(...)
+		Noir.Error("[", Color(0, 0, 150), "Editor", Color(255, 255, 255), "] ", ..., "\n")
+	end)
+end
+
+local columnHeaderColor = Color(40, 40, 40)
+local columnHeaderHoverColor = Color(70, 70, 70)
+-- Add a Noir-styled column to a DListView, with an optional fixed width. Shared by
+-- the file browser, the filesearch UI, and the editor error list so list columns
+-- look the same everywhere.
+function Utils.AddListColumn(listView, name, width)
+	local column = listView:AddColumn(name)
+	column.Header.BackgroundColor = columnHeaderColor
+	column.Header.HoveredColor = columnHeaderHoverColor
+	if width then column:SetWidth(width) end
+	return column
+end
+
+-- Build a Noir-skinned DComboBox that stashes its selected value on `.NoirValue`.
+-- `choices` is a list of {label = ..., value = ...}; `current` is the pre-selected value.
+function Utils.MakeCombo(parent, choices, current)
+	local combo = parent:Add("DComboBox")
+	combo:SetSkin("Noir")
+	combo.NoirValue = current
+	for _, c in ipairs(choices) do
+		combo:AddChoice(c.label, c.value, c.value == current)
+	end
+
+	combo.OnSelect = function(_, _, _, data) combo.NoirValue = data end
+	return combo
 end
 
 local menuTextColor = Color(200, 200, 200)

@@ -143,8 +143,9 @@ function Editor.Console.Toggle()
 	end
 end
 
--- Get the main console's REPL panel for output
-function Editor.Console.GetMainPanel()
+-- Return the main console's REPL panel, creating the Main Console tab if it doesn't
+-- exist yet. Named Ensure* (not Get*) because it has that lazy-creation side effect.
+function Editor.Console.EnsureMainPanel()
 	if not Editor.Console.Main then Editor.Console.CreateTab("Main Console", true) end
 	return Editor.Console.Main and Editor.Console.Main.ReplPanel
 end
@@ -161,7 +162,7 @@ end
 -- expressions (no hooks/timers) sent to a single realm; use the editor Run path for
 -- streaming/multi-target runs. Returns the run channel id.
 function Editor.Console.Evaluate(code, target, label)
-	local panel = Editor.Console.GetMainPanel()
+	local panel = Editor.Console.EnsureMainPanel()
 	if not panel then return end
 	target = target or "self"
 	label = label or "Noir.eval"
@@ -170,14 +171,13 @@ function Editor.Console.Evaluate(code, target, label)
 	if isfunction(CompileString("return " .. code, label, false)) then code = "return " .. code end
 	local id = Noir.Network.OpenChannel("runCode", target)
 	if not id then return end
-	Noir.Environment.RegisterHandler(function(sender, transferId, message, data)
-		local succ, err = pcall(panel.OnMessage, panel, target, label, sender, transferId, message, data)
-		if not succ then panel:AppendText(Format("--[[%s: Could not display output]] %s", label, err)) end
+	Noir.Environment.RegisterHandler(function(sender, channelId, message, data)
+		Noir.Utils.ForwardPanelMessage(panel, target, label, sender, channelId, message, data)
 		-- Bounded single-target expression: drop the channel once its result is in.
-		if message == "run" then Noir.Network.CloseChannel(transferId) end
+		if message == "run" then Noir.Network.CloseChannel(channelId) end
 	end, id)
 
-	Noir.SendCode(code, label, target, id)
+	Noir.SendCode(code, target, label, id)
 	Editor.Console.FocusMain()
 	return id
 end

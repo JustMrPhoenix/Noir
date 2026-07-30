@@ -8,7 +8,7 @@ function Environment.MakeVars()
 	-- Builds the per-run variable table on the SENDER. This table is networked
 	-- to the target, so it may only contain plain/networkable values (numbers,
 	-- vectors, entities) -- the magic search tables are functions/metatables and
-	-- cannot survive the transfer, so they are created target-side in
+	-- cannot survive being networked, so they are created target-side in
 	-- Environment.UpdateUpvals via Noir.Search.PopulateVars instead.
 	local ply = LocalPlayer()
 	if SERVER or not IsValid(ply) then return {} end
@@ -37,28 +37,38 @@ end
 -- `target` is the runner (the channel's opener); a self run delivers locally. Thin
 -- wrapper over the channel API so existing callers stay unchanged. Routing and the
 -- local-delivery shortcut are handled inside Network.SendOnChannel.
-function Environment.SendMessage(target, transferId, message, messageData)
-	Noir.Debug("Env.SendMessage", target, transferId, message, messageData)
+function Environment.SendMessage(target, channelId, message, messageData)
+	Noir.Debug("Env.SendMessage", target, channelId, message, messageData)
 	local messageBody = Noir.Format.FormatMessage(message, messageData, messageData.opts)
 	Noir.Debug("Env.SendMessageBODY", messageBody)
 	local dst = (isentity(target) and target:EntIndex() == 0) and "server" or target
-	Noir.Network.SendOnChannel(transferId, message, messageBody, dst)
+	Noir.Network.SendOnChannel(channelId, message, messageBody, dst)
+end
+
+-- Decode a "run" message envelope (the JSON `{done, formattedReturns}` produced by
+-- Format.FormatMessage) into its parts. Single decode point for every run-output
+-- consumer (repl, editor run, Noir.Run). Returns (done, returns, ok); ok is false
+-- when the payload wasn't valid JSON.
+function Environment.DecodeRunResult(data)
+	local tbl = util.JSONToTable(data)
+	if not tbl then return nil, nil, false end
+	return tbl[1], tbl[2], true
 end
 
 -- Register a handler for messages on a run channel. Wrapper over Network.OnChannel;
 -- preserves the (sender, id, message, body) callback shape (body = the message
 -- string) that run.lua / repl.lua expect.
-function Environment.RegisterHandler(callback, transferId, message)
-	Noir.Network.OnChannel(transferId, message, function(sender, channelId, msg, data)
+function Environment.RegisterHandler(callback, channelId, message)
+	Noir.Network.OnChannel(channelId, message, function(sender, _, msg, data)
 		callback(sender, channelId, msg, data.string)
 	end)
 end
 
 -- Tear down a run channel. Call from session / panel teardown -- NEVER on a run's
 -- `done`, since hooks/timers set up by the run may still be replying.
-function Environment.CloseRun(transferId, target)
-	if not transferId then return end
-	Noir.Network.CloseChannel(transferId, target)
+function Environment.CloseRun(channelId, target)
+	if not channelId then return end
+	Noir.Network.CloseChannel(channelId, target)
 end
 
 -- Format a run channel's target for display (a player nick, or the group name).
@@ -111,7 +121,10 @@ local function traceback()
 	while true do
 		local info = debug.getinfo(level, "Sln")
 		if not info then break end
-		if info.source == "@addons/noir/lua/noir/execution.lua" then
+		-- Match a stable path suffix, not a literal install path: the addon folder
+		-- is "noir" in prod but "noir-dev" on the dev symlink, so a full-path compare
+		-- would silently never trim.
+		if info.short_src and string.EndsWith(info.short_src, "/lua/noir/execution.lua") then
 			table.remove(lvls)
 			break
 		end
@@ -202,16 +215,16 @@ function Environment.MakeEnvTable(upvalues, isolate)
 	})
 end
 
-function Environment.CreateContext(runner, transferId, vars)
+function Environment.CreateContext(runner, channelId, vars)
 	local ContextTable = {}
-	ContextTable.ID = transferId
+	ContextTable.ID = channelId
 	ContextTable.Runner = runner
 	ContextTable.RunnerSteamID = runner:SteamID()
 	ContextTable.IsolateGlobal = vars.__ISOLATE_GLOBALS or false
 	ContextTable.Upvalues = vars or {}
 	ContextTable.EnvTable = Environment.MakeEnvTable(ContextTable.Upvalues, ContextTable.IsolateGlobal)
 	Environment.Contexts[runner] = Environment.Contexts[runner] or {}
-	Environment.Contexts[runner][transferId] = ContextTable
+	Environment.Contexts[runner][channelId] = ContextTable
 	-- UpdateUpvals reads LastContext[runner] to bind `last`, so populate this
 	-- context's upvalues (against the previous run) *before* overwriting the slot.
 	Environment.UpdateUpvals(ContextTable)
@@ -220,8 +233,8 @@ function Environment.CreateContext(runner, transferId, vars)
 	for _, v in pairs(Environment.MessageFuncs) do
 		local original = _G[v]
 		ContextTable.Upvalues[v] = function(...)
-			if Noir.Network.Channels[transferId] then
-				Environment.SendMessage(runner, transferId, v, {
+			if Noir.Network.Channels[channelId] then
+				Environment.SendMessage(runner, channelId, v, {
 					trace = traceback(),
 					args = {...},
 				})
@@ -263,7 +276,7 @@ end, nil, "Clears all Noir environments")
 if SERVER then
 	-- Free a leaving player's run contexts. The network layer's PlayerDisconnected
 	-- sweep drops their channels (firing runCode `close`, which clears individual
-	-- Contexts[opener][transferId]) but never touches the per-runner outer table or
+	-- Contexts[opener][channelId]) but never touches the per-runner outer table or
 	-- the `last` slot, both keyed by the now-invalid player entity.
 	hook.Add("PlayerDisconnected", "Noir.Environment.Cleanup", function(ply)
 		if not IsValid(ply) then return end

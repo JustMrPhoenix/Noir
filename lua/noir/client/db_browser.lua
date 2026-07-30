@@ -148,17 +148,7 @@ vgui.Register("NoirDBTree", PANEL, "DPanel")
 --------------------------------------------------------------------------------
 function DBBrowser.Open()
 	if IsValid(DBBrowser.Frame) then DBBrowser.Frame:Remove() end
-	local frame = vgui.Create("DFrame")
-	frame:SetSkin("Noir")
-	frame:SetTitle("Database Browser")
-	frame:SetSize(360, 520)
-	frame:Center()
-	frame:SetDraggable(true)
-	frame:SetSizable(true)
-	frame:SetDeleteOnClose(true)
-	frame:MakePopup()
-	frame.btnMinim:SetVisible(false)
-	frame.btnMaxim:SetVisible(false)
+	local frame = Noir.Utils.CreateNoirWindow("Database Browser", 360, 520)
 
 	local content = vgui.Create("NoirDBTree", frame)
 	content:Dock(FILL)

@@ -81,18 +81,19 @@ local function formatSource(shortSrc, lineStart, lineEnd)
 	return fmt("@%s:%d-%d", shortSrc, lineStart, lineEnd)
 end
 
-local function getlocals(func)
-	local locals = {}
-	local names_only = {}
+-- Ordered list of a function's local/parameter names, via debug.getlocal (which
+-- enumerates in declaration order, so leading entries are the parameters). Only the
+-- names are needed here, so we don't build a name->value map.
+local function getLocalNames(func)
+	local names = {}
 	local i = 1
 	while true do
-		local name, value = debug.getlocal(func, i)
+		local name = debug.getlocal(func, i)
 		if name == nil then break end
-		locals[name] = value == nil and NIL or value
-		names_only[i] = name
+		names[i] = name
 		i = i + 1
 	end
-	return locals, names_only
+	return names
 end
 
 function Format.DecompileFunc(func, level, doFull)
@@ -162,8 +163,7 @@ function Format.FormatShort(val, maxLen)
 				if debugInfo.isvararg then
 					args_str = "..."
 				else
-					local _, args = getlocals(val)
-					args_str = table.concat(args, ",")
+					args_str = table.concat(getLocalNames(val), ",")
 				end
 				return fmt("func:%p(%s)", val, args_str),
 					formatSource(debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
@@ -331,64 +331,6 @@ local function findPatternError(opts)
 	return fmt("-- invalid Lua pattern: \"%s\"", opts.find)
 end
 
--- Synchronous deep find over a value tree matching opts.find. Kept for EvalCode /
--- direct FormatLong callers; the REPL run path uses Format.DeepFindAsync so a large
--- walk doesn't freeze the realm it runs on. Returns a comment header plus one line
--- per match, each showing the access path.
-function Format.DeepFind(root, opts)
-	local patternErr = findPatternError(opts)
-	if patternErr then return patternErr end
-	local test, render, funcReason = Format.MakeFindMatcher(opts)
-	local results = {}
-	local seen = {}
-	local max = opts.findMaxResults or 500
-	local maxDepth = opts.findMaxDepth or Format.FIND_MAX_DEPTH
-	local truncated = false
-
-	-- Breadth-first (see Noir.TableSearch): the first time a table is reached is via a
-	-- shortest path, so matches/paths under it use the fewest-hops access path.
-	if istable(root) and not IsColor(root) then
-		local queue = {{root, "", 0}}
-		seen[root] = true
-		local head = 1
-		while head <= #queue and not truncated do
-			local node = queue[head]
-			queue[head] = false
-			head = head + 1
-			local tbl, path, depth = node[1], node[2], node[3]
-			for k, v in pairs(tbl) do
-				if #results >= max then truncated = true break end
-				local desc = test(k, v)
-				local enqueue = depth < maxDepth and istable(v) and not IsColor(v)
-					and not seen[v] and not findSkip(k)
-				if desc or enqueue then
-					local keyStr = Format.FindKeyStr(path, k)
-					if desc then
-						local lines = render(keyStr, v, desc)
-						for i = 1, #lines do
-							results[#results + 1] = lines[i]
-							if #results >= max then
-								truncated = true
-								break
-							end
-						end
-					end
-
-					if enqueue then
-						seen[v] = true
-						queue[#queue + 1] = {v, keyStr, depth + 1}
-					end
-				end
-			end
-		end
-	elseif opts.findFuncs and isfunction(root) then
-		local reason = funcReason(root)
-		if reason then results[#results + 1] = fmt("%s -- [func: %s]", Format.FormatShort(root), reason) end
-	end
-
-	return findText(opts, results, truncated, max)
-end
-
 -- Asynchronous deep find: walks a table root off Noir.TableSearch's time-budgeted
 -- driver (so it never freezes the realm), then calls onDone(finalString). A non-table
 -- (or bare-function) root is cheap and handled synchronously. Returns the running job
@@ -427,13 +369,7 @@ function Format.DeepFindAsync(root, opts, onDone)
 end
 
 function Format.FormatLong(val, level, opts, doneTbls)
-	-- opts can be a table {full, shallow, keys, values, depth} or boolean for backwards compat
-	if opts == true then
-		opts = {
-			full = true
-		}
-	end
-
+	-- opts is a table {full, shallow, keys, values, depth}
 	opts = opts or {}
 	local doFull = opts.full
 	local valType = type(val)
@@ -443,8 +379,6 @@ function Format.FormatLong(val, level, opts, doneTbls)
 	-- Pre-formatted passthrough: an already-assembled string (e.g. an async find result)
 	-- is delivered verbatim rather than re-quoted or re-searched.
 	if opts.preformatted and level == 0 and isstring(val) then return val end
-	-- Deep-find modes search the whole value tree (incl. functions) and produce their own output
-	if opts.find and level == 0 then return Format.DeepFind(val, opts) end
 	local levelIndent = string.rep("    ", level)
 	-- Check if we've hit the depth limit
 	local maxDepth = opts.depth
@@ -515,8 +449,8 @@ function Format.FormatLong(val, level, opts, doneTbls)
 	elseif val and not istable(val) and isfunction(val.GetTable) then
 		return fmt("-- %s\n%s", Format.FormatShort(val), Format.FormatLong(val:GetTable(), level, opts, doneTbls))
 	elseif not istable(val) or IsColor(val) then
-		return Format.FormatShort(val)
-	elseif val == nil or (not istable(val) and not IsValid(val)) then
+		-- Every remaining non-table (and colors) short-formats; the table body below
+		-- is only reached for real tables.
 		return Format.FormatShort(val)
 	end
 
@@ -548,6 +482,31 @@ function Format.FormatLong(val, level, opts, doneTbls)
 	-- For --shallow, we expand the top level but use short format for nested tables
 	-- For --depth, we expand like --full but limited to the specified depth
 	local shouldExpand = doFull or opts.shallow or opts.depth
+	-- Format one entry's value: recurse into nested tables when expanding, else
+	-- short-format, then decorate any trailing comment. Shared by the sequential
+	-- and keyed branches, which differ only in how the key/line is rendered.
+	local function formatEntry(v)
+		local str, cmt
+		-- With --shallow, only expand at level 0
+		local expandNested = (shouldExpand and not opts.shallow) or (opts.shallow and level == 0)
+		if (expandNested or (level == 0 and istable(v) and table.Count(v) < 6)) and not doneTbls[v] then
+			doneTbls[v] = true
+			-- For shallow mode, don't pass shallow to nested calls (they'll use short format)
+			local nestedOpts = opts.shallow and {} or opts
+			str, cmt = Format.FormatLong(v, level + 1, nestedOpts, doneTbls)
+		else
+			str, cmt = Format.FormatShort(v)
+		end
+
+		if cmt and string.find(cmt, "\n") then
+			cmt = fmt(" --[[ %s ]]", cmt)
+		elseif cmt then
+			cmt = fmt(" -- %s", cmt)
+		end
+
+		return str, cmt or ""
+	end
+
 	for k, v in Format.GetIterator(opts)(val) do
 		if done >= 100 and not doFull and not opts.depth and not opts.shallow then
 			result = fmt("%s\n%s-- %s more...", result, string.rep(" ", (level + 1) * 4), total - done)
@@ -556,26 +515,10 @@ function Format.FormatLong(val, level, opts, doneTbls)
 
 		done = done + 1
 
+		local indent = string.rep(" ", (level + 1) * 4)
+		local str, cmt = formatEntry(v)
 		if sequential then
-			local str, cmt
-			-- With --shallow, only expand at level 0
-			local expandNested = (shouldExpand and not opts.shallow) or (opts.shallow and level == 0)
-			if (expandNested or (level == 0 and istable(v) and table.Count(v) < 6)) and not doneTbls[v] then
-				doneTbls[v] = true
-				-- For shallow mode, don't pass shallow to nested calls (they'll use short format)
-				local nestedOpts = opts.shallow and {} or opts
-				str, cmt = Format.FormatLong(v, level + 1, nestedOpts, doneTbls)
-			else
-				str, cmt = Format.FormatShort(v)
-			end
-
-			if cmt and string.find(cmt, "\n") then
-				cmt = fmt(" --[[ %s ]]", cmt)
-			elseif cmt then
-				cmt = fmt(" -- %s", cmt)
-			end
-
-			result = fmt("%s\n%s%s,%s", result, string.rep(" ", (level + 1) * 4), str, cmt or "")
+			result = fmt("%s\n%s%s,%s", result, indent, str, cmt)
 		else
 			if not isstring(k) then
 				k = fmt("[%s]", Format.FormatShort(k))
@@ -583,25 +526,7 @@ function Format.FormatLong(val, level, opts, doneTbls)
 				k = fmt("[\"%s\"]", string.Replace(k, "\"", "\\\""))
 			end
 
-			local str, cmt
-			-- With --shallow, only expand at level 0
-			local expandNested = (shouldExpand and not opts.shallow) or (opts.shallow and level == 0)
-			if (expandNested or (level == 0 and istable(v) and table.Count(v) < 6)) and not doneTbls[v] then
-				doneTbls[v] = true
-				-- For shallow mode, don't pass shallow to nested calls (they'll use short format)
-				local nestedOpts = opts.shallow and {} or opts
-				str, cmt = Format.FormatLong(v, level + 1, nestedOpts, doneTbls)
-			else
-				str, cmt = Format.FormatShort(v)
-			end
-
-			if cmt and string.find(cmt, "\n") then
-				cmt = fmt(" --[[ %s ]]", cmt)
-			elseif cmt then
-				cmt = fmt(" -- %s", cmt)
-			end
-
-			result = fmt("%s\n%s%s = %s,%s", result, string.rep(" ", (level + 1) * 4), k, str, cmt or "")
+			result = fmt("%s\n%s%s = %s,%s", result, indent, k, str, cmt)
 		end
 	end
 
@@ -702,4 +627,24 @@ function Format.RegisterDashboard()
 		description = "Deep-find (--find) search settings"
 	})
 	Format.SearchDashboardRegistered = true
+end
+
+-- Resolved-settings getters so callers (e.g. execution.lua) read output/search
+-- config through this module -- which owns the Dashboard categories -- instead of
+-- re-typing the category/key string literals. Return an empty table off the client
+-- (no Dashboard), letting callers fall back to defaults.
+function Format.GetOutputSettings()
+	if not (CLIENT and Noir.Dashboard) then return {} end
+	return {
+		sortMode = Noir.Dashboard.Get("Output", "tableSort"),
+	}
+end
+
+function Format.GetSearchSettings()
+	if not (CLIENT and Noir.Dashboard) then return {} end
+	return {
+		frameBudgetMs = Noir.Dashboard.Get("Search", "frameBudgetMs"),
+		maxResults = Noir.Dashboard.Get("Search", "maxResults"),
+		maxDepth = Noir.Dashboard.Get("Search", "maxDepth"),
+	}
 end

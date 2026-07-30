@@ -14,11 +14,11 @@ function Editor.Run.Code(target)
 	Editor.Run.LastTarget = target
 	Editor.Storage.QueueSave()
 	-- JS tabs run in the editor's own DHTML (JS is local-only, so `target` is
-	-- ignored); no network transfer. Noir.BuildJSEditorRun swaps in the original
+	-- ignored); nothing is networked. Noir.BuildJSEditorRun swaps in the original
 	-- console for the run so output prints plainly to the game console instead of
 	-- going through the Editor's "[Editor]"-prefixed console overrides.
 	-- Call RunJavascript directly since PANEL:RunJS would Format() the snippet.
-	if Editor.ActiveSession and Editor.ActiveSession.language == "javascript" then
+	if Editor.ActiveSession.language == "javascript" then
 		Editor.MonacoPanel.HTMLPanel:RunJavascript(Noir.BuildJSEditorRun(Editor.ActiveSession.code))
 		Editor.MonacoPanel:SetStatus("Ran as JavaScript (output in game console)", Color(0, 150, 0), true)
 		return
@@ -41,21 +41,20 @@ function Editor.Run.Code(target)
 	-- Track every run this session starts (id -> target). Each run channel may keep
 	-- replying, so we hold them until the session is closed (Editor.Session.Close)
 	-- and tear them down together.
-	Editor.ActiveSession.runTransfers = Editor.ActiveSession.runTransfers or {}
-	Editor.ActiveSession.runTransfers[id] = target
+	Editor.ActiveSession.runChannels = Editor.ActiveSession.runChannels or {}
+	Editor.ActiveSession.runChannels[id] = target
 
 	local totalRan = 0
 	local hasError = false
-	Noir.Environment.RegisterHandler(function(sender, transferId, _, data)
+	Noir.Environment.RegisterHandler(function(sender, channelId, _, data)
 		totalRan = totalRan + 1
-		local tbl = util.JSONToTable(data)
-		if not tbl then
+		local done, returns, ok = Noir.Environment.DecodeRunResult(data)
+		if not ok then
 			hasError = true
 			Noir.Error("Received invalid response from ", sender == Entity(0) and "SERVER" or tostring(sender), "\nData: ", data, "\n")
 			return
 		end
 
-		local done, returns = unpack(util.JSONToTable(data))
 		local senderName = sender == Entity(0) and "SERVER" or tostring(sender)
 		if not done then
 			hasError = true
@@ -77,18 +76,17 @@ function Editor.Run.Code(target)
 	end, id, "run")
 
 	-- Get the main console panel for output (creates it if needed)
-	local replPanel = Editor.Console.GetMainPanel()
+	local replPanel = Editor.Console.EnsureMainPanel()
 	if replPanel then
 		local sessionName = Editor.ActiveSession.name
 		local runStartTime = SysTime()
 		local hasFocused = false
-		Noir.Environment.RegisterHandler(function(sender, transferId, message, data)
-			local done, returns = unpack(util.JSONToTable(data) or {})
+		Noir.Environment.RegisterHandler(function(sender, channelId, message, data)
+			local done, returns = Noir.Environment.DecodeRunResult(data)
 			if message == "run" and done and returns == "nil" then return end
 			local displayname = Format("%s[%s]", sessionName, table.concat({string.match(id, "(%x%x)%x+(%x%x)$")}, ".."))
 			if targets ~= 1 then displayname = displayname .. "-" .. (sender == Entity(0) and "SERVER" or tostring(sender)) end
-			local succ, err = pcall(replPanel.OnMessage, replPanel, target, displayname, sender, transferId, message, data)
-			if not succ then replPanel:AppendText(Format("--[[%s: Could not display output]] %s", displayname, err)) end
+			Noir.Utils.ForwardPanelMessage(replPanel, target, displayname, sender, channelId, message, data)
 			-- Only focus main console if output arrives immediately after running (within 1 second)
 			if not hasFocused and (SysTime() - runStartTime) < 1 then
 				hasFocused = true
@@ -116,7 +114,7 @@ function Editor.Run.Code(target)
 		end
 	end
 
-	Noir.SendCode(Editor.ActiveSession.code, Editor.ActiveSession.name, target, id, runOpts)
+	Noir.SendCode(Editor.ActiveSession.code, target, Editor.ActiveSession.name, id, runOpts)
 end
 
 function Editor.Run.UpdateCOH()
@@ -133,12 +131,5 @@ function Editor.Run.UpdateCOH()
 		end
 	end
 
-	local maxLineLen = 0
-	for _, line in pairs(string.Split(cohText, "\n")) do
-		maxLineLen = math.max(maxLineLen, string.len(line))
-	end
-
-	local indentSize = math.ceil(maxLineLen / 2)
-	cohText = string.rep(" ", indentSize) .. "[Noir Editor]" .. string.rep(" ", indentSize) .. "\n" .. cohText
-	coh.SendTypedMessage(cohText)
+	coh.SendTypedMessage(Noir.Utils.CenterCOHTitle(cohText, "[Noir Editor]"))
 end
