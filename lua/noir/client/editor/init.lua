@@ -1,9 +1,13 @@
 local Editor = Noir.Editor or {}
 Noir.Editor = Editor
-Editor.IsReady = false
+-- Preserve readiness across a non-full reload: the Monaco DHTML page isn't rebuilt
+-- on a Lua-only reload, so monaco.OnReady won't fire again to re-set this. If the
+-- frame is still alive it's still ready; only reset to false when there's no frame
+-- (first load, or a full reload that wiped the global -- CreateFrame rebuilds then).
+Editor.IsReady = (IsValid(Editor.Frame) and Editor.IsReady) or false
 Editor.Sessions = Editor.Sessions or {}
 Editor.SessionsByName = Editor.SessionsByName or {}
-Editor.PendingOnReady = {} -- Actions queued until editor is ready
+Editor.PendingOnReady = Editor.PendingOnReady or {} -- Actions queued until editor is ready
 
 -- Tab/session kinds. Editor = a Monaco document; Console = a REPL panel; SQL = a
 -- database query tab. The string values are what's stored on a session and in

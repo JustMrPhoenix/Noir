@@ -7,6 +7,15 @@ local REALM_SERVER = Color(88, 160, 255)
 local REALM_SELF = Color(120, 200, 120)
 local REALM_CLIENT = Color(230, 185, 90)
 
+-- Default body color for certain message kinds, keyed by the message name in OnMessage.
+-- Applied to the whole body; MsgC still overrides per segment with its own colors. "ERROR"
+-- is the synthetic name OnMessage gives a failed run; ErrorNoHalt is the captured function.
+local ERROR_COLOR = Color(235, 90, 90)
+local MESSAGE_COLORS = {
+	ERROR = ERROR_COLOR,
+	ErrorNoHalt = ERROR_COLOR,
+}
+
 -- Label + color for the realm that produced a message (`sender` is the run's
 -- responder: Entity(0) for the server, or a player). The local player reads as
 -- "CLIENT" (mirroring "SERVER"); remote players show their name.
@@ -525,12 +534,6 @@ function PANEL:OnMessage(target, replName, sender, channelId, message, messageBo
 		end
 	end
 
-	if string.find(messageBody, "\n") then messageBody = "\n" .. messageBody end
-
-	-- The run result of a command typed into this panel is its answer; script
-	-- output (print/Msg) and results relayed from editor runs are plain output.
-	local isAnswer = isRunResult and channelId == self.lastChannel
-
 	-- Always tag output with a colored realm indicator so you can tell which realm
 	-- produced each line: "SELF" for a self run, otherwise SERVER / CLIENT / a
 	-- remote player's name per the sender.
@@ -540,12 +543,53 @@ function PANEL:OnMessage(target, replName, sender, channelId, message, messageBo
 	else
 		realmName, realmColor = realmInfo(sender)
 	end
+
+	-- Captured console functions (print/Msg/MsgC/...) arrive as a color-aware segment list
+	-- so MsgC renders in its real colors and strings aren't quoted. The realm prefix ends
+	-- with `false` (reset), so the message's own colors start from the default and each
+	-- Color paints the following text just like the engine.
+	if not isRunResult and Noir.Format.MessageFuncSet[message] then
+		local decoded = Noir.Format.DecodeMsgSegments(messageBody)
+		if decoded then
+			local segments = {
+				Format("--[[%-13s: ", replName),
+				realmColor, realmName, false,
+				Format(" : %s]] ", message),
+			}
+
+			-- Tint the whole body (e.g. ErrorNoHalt red); MsgC's own color segments
+			-- below still override it wherever it sets one.
+			local bodyColor = MESSAGE_COLORS[message]
+			if bodyColor then segments[#segments + 1] = bodyColor end
+			for _, seg in ipairs(decoded) do
+				if seg.c then
+					segments[#segments + 1] = Color(seg.c[1], seg.c[2], seg.c[3])
+				else
+					segments[#segments + 1] = seg.t
+				end
+			end
+
+			self:AppendColored(segments)
+			return
+		end
+	end
+
+	if string.find(messageBody, "\n") then messageBody = "\n" .. messageBody end
+
+	-- The run result of a command typed into this panel is its answer; script
+	-- output and results relayed from editor runs are plain output.
+	local isAnswer = isRunResult and channelId == self.lastChannel
+	-- Colored body (e.g. a failed run's "ERROR") is emitted as its own segment so the
+	-- realm prefix keeps its normal coloring; uncolored kinds stay default.
+	local bodyColor = MESSAGE_COLORS[message]
 	local segments = {
 		Format("--[[%-13s: ", replName),
 		realmColor, realmName, false,
-		Format(" : %s]] %s", message, messageBody),
+		Format(" : %s]] ", message),
 	}
 
+	if bodyColor then segments[#segments + 1] = bodyColor end
+	segments[#segments + 1] = messageBody
 	if isAnswer then self:AppendColoredAnswer(segments) else self:AppendColored(segments) end
 end
 

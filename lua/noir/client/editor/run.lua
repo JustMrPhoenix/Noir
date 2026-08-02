@@ -11,15 +11,39 @@ function Editor.Run.Code(target)
 		Editor.MonacoPanel:SetStatus(Format("This tab can't run on '%s'", tostring(target)), Color(200, 150, 0), true)
 		return
 	end
+
+	-- Capture the session now; the actual run is deferred until Monaco hands back its
+	-- live code, so hold a stable reference in case the user clicks elsewhere meanwhile.
+	local session = Editor.ActiveSession
 	Editor.Run.LastTarget = target
 	Editor.Storage.QueueSave()
+
+	-- Pull the freshest code straight from Monaco before running. OnCode (the JS->Lua
+	-- edit notification) is async over the DHTML bridge, so `session.code` can still be
+	-- the pre-paste value when a run is triggered right after a paste -- which surfaced
+	-- as the engine running an empty/short script ("Invalid script - or too short").
+	Editor.MonacoPanel:WithFreshSessions(function(sessions)
+		if sessions then
+			for _, v in ipairs(sessions) do
+				if v.name == session.name then
+					session.code = v.code
+					break
+				end
+			end
+		end
+
+		Editor.Run.Execute(session, target)
+	end)
+end
+
+function Editor.Run.Execute(session, target)
 	-- JS tabs run in the editor's own DHTML (JS is local-only, so `target` is
 	-- ignored); nothing is networked. Noir.BuildJSEditorRun swaps in the original
 	-- console for the run so output prints plainly to the game console instead of
 	-- going through the Editor's "[Editor]"-prefixed console overrides.
 	-- Call RunJavascript directly since PANEL:RunJS would Format() the snippet.
-	if Editor.ActiveSession.language == "javascript" then
-		Editor.MonacoPanel.HTMLPanel:RunJavascript(Noir.BuildJSEditorRun(Editor.ActiveSession.code))
+	if session.language == "javascript" then
+		Editor.MonacoPanel.HTMLPanel:RunJavascript(Noir.BuildJSEditorRun(session.code))
 		Editor.MonacoPanel:SetStatus("Ran as JavaScript (output in game console)", Color(0, 150, 0), true)
 		return
 	end
@@ -41,8 +65,8 @@ function Editor.Run.Code(target)
 	-- Track every run this session starts (id -> target). Each run channel may keep
 	-- replying, so we hold them until the session is closed (Editor.Session.Close)
 	-- and tear them down together.
-	Editor.ActiveSession.runChannels = Editor.ActiveSession.runChannels or {}
-	Editor.ActiveSession.runChannels[id] = target
+	session.runChannels = session.runChannels or {}
+	session.runChannels[id] = target
 
 	local totalRan = 0
 	local hasError = false
@@ -58,7 +82,7 @@ function Editor.Run.Code(target)
 		local senderName = sender == Entity(0) and "SERVER" or tostring(sender)
 		if not done then
 			hasError = true
-			local msg, line = Noir.Utils.ParseLuaError(returns, Editor.ActiveSession.name)
+			local msg, line = Noir.Utils.ParseLuaError(returns, session.name)
 			if CLIENT and sender == LocalPlayer() then
 				Editor.MonacoPanel:AddLuaError(msg, line)
 				Editor.MonacoPanel:SetStatus(Format("Error: %s at line %s", msg, line), Color(150, 0, 0), true)
@@ -78,7 +102,7 @@ function Editor.Run.Code(target)
 	-- Get the main console panel for output (creates it if needed)
 	local replPanel = Editor.Console.EnsureMainPanel()
 	if replPanel then
-		local sessionName = Editor.ActiveSession.name
+		local sessionName = session.name
 		local runStartTime = SysTime()
 		local hasFocused = false
 		Noir.Environment.RegisterHandler(function(sender, channelId, message, data)
@@ -97,12 +121,12 @@ function Editor.Run.Code(target)
 
 	-- SWEP/SENT: flag the run with the tab's effective entity type so the target realm
 	-- wraps the body in Start/End. Registering needs both realms, so nudge toward Shared.
-	local entType = Editor.Session.GetEntType(Editor.ActiveSession)
+	local entType = Editor.Session.GetEntType(session)
 	local runOpts
 	if entType then
 		runOpts = {
 			entType = entType,
-			entClass = Editor.Session.GetEntClass(Editor.ActiveSession),
+			entClass = Editor.Session.GetEntClass(session),
 			spawn = false
 		}
 
@@ -114,7 +138,7 @@ function Editor.Run.Code(target)
 		end
 	end
 
-	Noir.SendCode(Editor.ActiveSession.code, target, Editor.ActiveSession.name, id, runOpts)
+	Noir.SendCode(session.code, target, session.name, id, runOpts)
 end
 
 function Editor.Run.UpdateCOH()

@@ -233,11 +233,16 @@ function Environment.CreateContext(runner, channelId, vars)
 	for _, v in pairs(Environment.MessageFuncs) do
 		local original = _G[v]
 		ContextTable.Upvalues[v] = function(...)
+			-- Relay the call to the runner's console. pcall so a formatting error can never
+			-- abort the user's script or, worse, swallow the output entirely by skipping the
+			-- real function below -- the capture is best-effort, the original call is not.
 			if Noir.Network.Channels[channelId] then
-				Environment.SendMessage(runner, channelId, v, {
+				local ok, err = pcall(Environment.SendMessage, runner, channelId, v, {
 					trace = traceback(),
 					args = {...},
+					n = select("#", ...),
 				})
+				if not ok then Noir.Debug("Message capture failed for ", v, ": ", err) end
 			end
 
 			original(...)

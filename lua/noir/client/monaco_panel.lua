@@ -339,8 +339,26 @@ function PANEL:GetSessions()
 	self:RunJS([[gmodinterface.GetSessions()]])
 end
 
+-- Request the freshest session data from Monaco (GetSessions calls SaveSession first,
+-- so the active session's `code` is the live editor value) and invoke `callback(sessions)`
+-- once it arrives. Used by the run path to avoid running stale code: OnCode (the edit
+-- notification) is async over the DHTML bridge, so a run triggered right after a paste
+-- would otherwise read the pre-paste value. If Monaco isn't ready yet, calls back with nil.
+function PANEL:WithFreshSessions(callback)
+	if not self.Ready then callback(nil) return end
+	self.SessionsCallbacks = self.SessionsCallbacks or {}
+	table.insert(self.SessionsCallbacks, callback)
+	self:GetSessions()
+end
+
 function PANEL:JS_OnSessions(sessions)
 	if self.OnSessions then self:OnSessions(sessions) end
+	-- Fire (and clear) any one-shot fresh-sessions callbacks queued by WithFreshSessions.
+	if self.SessionsCallbacks and #self.SessionsCallbacks > 0 then
+		local callbacks = self.SessionsCallbacks
+		self.SessionsCallbacks = {}
+		for _, cb in ipairs(callbacks) do cb(sessions) end
+	end
 end
 
 function PANEL:JS_OnSessionSet(session)

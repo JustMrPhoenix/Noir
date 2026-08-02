@@ -232,7 +232,11 @@ function Noir.SendCode(code, target, identifier, channelId, opts)
 		vars = Noir.Environment.MakeVars()
 	}
 
-	data.sortMode = Noir.Format.GetOutputSettings().sortMode
+	local outputSettings = Noir.Format.GetOutputSettings()
+	data.sortMode = outputSettings.sortMode
+	-- Function source-resolution toggles, applied target-side in Format.ResolveFuncSource.
+	data.funcSourceLocalFile = outputSettings.funcSourceLocalFile
+	data.funcSourceDecompile = outputSettings.funcSourceDecompile
 
 	-- SWEP/SENT auto-mode: an explicit flag set by the caller (the editor knows a tab's
 	-- type). Rides to the target realm, where runAndReply wraps the body in Start/End.

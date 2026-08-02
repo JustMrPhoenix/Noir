@@ -19,6 +19,36 @@ local blacklistedTypes = {
 	["proto"] = true
 }
 
+-- Console message-emitting functions Noir detours from a run (see Environment.MessageFuncs).
+-- Declared here (shared, and output_format loads before environment) so BOTH the sender-side
+-- segment encoder and the console renderer recognise these message names by the same set --
+-- including PrintMessage, which is server-only in the detour list but can still arrive at a
+-- client console from a server run. Gating on the message NAME (not on a `.args` field) keeps
+-- run return values that happen to contain an `args` key from being mis-encoded.
+Format.MessageFuncSet = {
+	print = true,
+	Msg = true,
+	MsgC = true,
+	MsgN = true,
+	MsgAll = true,
+	ErrorNoHalt = true,
+	PrintMessage = true,
+}
+
+-- Output shape per function, mirroring the real GMod calls: how args are joined. Only MsgC
+-- colorises (a Color arg paints the strings after it, exactly like the engine). Anything not
+-- listed falls back to no separator. Trailing newlines are stripped in FormatMsgSegments --
+-- the console already puts each call on its own line.
+local MSG_SHAPE = {
+	print = {sep = "\t"},
+	MsgN = {sep = ""},
+	Msg = {sep = ""},
+	MsgC = {sep = "", color = true},
+	MsgAll = {sep = ""},
+	ErrorNoHalt = {sep = ""},
+	PrintMessage = {sep = " "},
+}
+
 -- Format a number for a vector/angle component: keep up to 3 decimals but strip
 -- trailing zeros so whole numbers stay clean and fractional values aren't lost.
 local function fmtNum(n)
@@ -113,6 +143,66 @@ function Format.DecompileFunc(func, level, doFull)
 	end
 
 	return src, formatSource(debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
+end
+
+-- Raw bytecode listing only, with no structural reconstruction. The always-available
+-- final fallback in the source-resolution chain, used when decompilation is disabled.
+function Format.DisassembleFunc(func, level)
+	level = level or 0
+	local levelIndent = string.rep("    ", level)
+	local listing = jit.decompiler2.disassemble(func, {indent = levelIndent .. "    ", formatValue = Format.FormatShort})
+	if not listing then
+		return fmt("%sfunction() --[[ cannot disassemble ]] end", levelIndent)
+	end
+	return fmt("%sfunction() --[[ bytecode:\n%s\n%s]] end", levelIndent, listing, levelIndent)
+end
+
+-- Resolve a Lua function's displayed body per the configured source-resolution chain,
+-- trying the highest-priority enabled method first and falling back when a method is
+-- disabled or unavailable:
+--   1. read from local file  (opts.funcSourceLocalFile, default off)
+--   2. decompile bytecode    (opts.funcSourceDecompile, default on)
+--   3. disassemble bytecode  (always available -- the final fallback)
+-- (A fourth method -- retrieving the source from the server -- is not implemented yet.)
+-- Settings ride to the target realm in the run data (see Noir.SendCode). Returns
+-- (bodyText, sourceRef).
+function Format.ResolveFuncSource(func, level, opts)
+	opts = opts or {}
+	level = level or 0
+	local levelIndent = string.rep("    ", level)
+	local debugInfo = debug.getinfo(func)
+	local sourceRef = formatSource(debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
+
+	-- 1) Read the definition straight from the on-disk source file.
+	if opts.funcSourceLocalFile then
+		local fullpath = debugInfo.short_src
+		if file.Exists(fullpath, "GAME") then
+			local lines = string.Split(file.Read(fullpath, "GAME"), "\n")
+			-- Only trust the file when it actually spans the whole definition; otherwise
+			-- fall through to decompile/disassemble.
+			if debugInfo.lastlinedefined <= #lines then
+				local info = sourceRef
+				if debugInfo.source ~= "@" .. debugInfo.short_src then
+					info = fmt("%s\n%s-- %s", debugInfo.source, levelIndent, sourceRef)
+				end
+
+				local indent = "^" .. string.match(lines[debugInfo.linedefined], "^%s*")
+				local result = string.gsub(lines[debugInfo.linedefined], indent, "")
+				for i = debugInfo.linedefined + 1, debugInfo.lastlinedefined do
+					result = result .. "\n" .. levelIndent .. string.gsub(lines[i], indent, "")
+				end
+				return string.Trim(result), info
+			end
+		end
+	end
+
+	-- 2) Reconstruct pseudo-Lua from bytecode (with 3 appended under --full), or
+	-- 3) fall back to a raw disassembly listing when decompilation is disabled.
+	if opts.funcSourceDecompile == false then
+		return Format.DisassembleFunc(func, level), sourceRef
+	end
+
+	return Format.DecompileFunc(func, level, opts.full)
 end
 
 -- maxLen (optional): cap on how many characters of a string value are escaped/shown.
@@ -419,32 +509,7 @@ function Format.FormatLong(val, level, opts, doneTbls)
 		if debugInfo.what == "C" then
 			return fmt("cfunc:%p", val)
 		else
-			local fullpath = debugInfo.short_src
-			local sourceRef = formatSource(debugInfo.short_src, debugInfo.linedefined, debugInfo.lastlinedefined)
-			local info
-			if debugInfo.source ~= "@" .. debugInfo.short_src then
-				info = fmt("%s\n%s-- %s", debugInfo.source, levelIndent, sourceRef)
-			else
-				info = sourceRef
-			end
-
-			if file.Exists(fullpath, "GAME") then
-				local fileContent = file.Read(fullpath, "GAME")
-				local lines = string.Split(fileContent, "\n")
-				if debugInfo.lastlinedefined > #lines then return Format.DecompileFunc(val, level, opts.full) end
-				local indent = "^" .. string.match(lines[debugInfo.linedefined], "^%s*")
-				local result = string.gsub(lines[debugInfo.linedefined], indent, "")
-				if debugInfo.linedefined == debugInfo.lastlinedefined then
-					return string.Trim(result), info
-				else
-					for i = debugInfo.linedefined + 1, debugInfo.lastlinedefined do
-						result = result .. "\n" .. levelIndent .. string.gsub(lines[i], indent, "")
-					end
-					return string.Trim(result), info
-				end
-			else
-				return Format.DecompileFunc(val, level, opts.full)
-			end
+			return Format.ResolveFuncSource(val, level, opts)
 		end
 	elseif val and not istable(val) and isfunction(val.GetTable) then
 		return fmt("-- %s\n%s", Format.FormatShort(val), Format.FormatLong(val:GetTable(), level, opts, doneTbls))
@@ -534,6 +599,48 @@ function Format.FormatLong(val, level, opts, doneTbls)
 	return result
 end
 
+-- Encode a captured console-function call (print/Msg/MsgC/...) as a JSON segment list the
+-- console renders directly. This preserves what the real function does: MsgC's Color args
+-- become color segments that paint the following text, plain strings pass through raw (the
+-- engine doesn't quote them), and every other value is still dumped via FormatLong so
+-- print(someTable) keeps showing the table. `n` is the real argument count (select("#"))
+-- so trailing/embedded nils survive. Segment: {c = {r,g,b}} for a color, else {t = string}.
+function Format.FormatMsgSegments(message, args, n, opts)
+	local shape = MSG_SHAPE[message] or {sep = ""}
+	n = n or table.maxn(args)
+	local segments = {}
+	for i = 1, n do
+		local v = args[i]
+		if shape.color and IsColor(v) then
+			segments[#segments + 1] = {c = {v.r, v.g, v.b}}
+		else
+			local text = isstring(v) and v or (Format.FormatLong(v, 0, opts))
+			if shape.sep ~= "" and i < n then text = text .. shape.sep end
+			segments[#segments + 1] = {t = text}
+		end
+	end
+
+	-- Strip trailing newlines off the last text segment: the console already puts each
+	-- captured call on its own line, so a trailing "\n" would leave a blank line after it.
+	for i = #segments, 1, -1 do
+		if segments[i].t then
+			segments[i].t = segments[i].t:gsub("\n+$", "")
+			break
+		end
+	end
+
+	return util.TableToJSON(segments)
+end
+
+-- Decode a segment list produced by FormatMsgSegments back into its array form (each entry
+-- {c = {r,g,b}} or {t = string}). Returns nil if `body` isn't such a payload, so callers can
+-- fall back to plain-string rendering.
+function Format.DecodeMsgSegments(body)
+	local decoded = util.JSONToTable(body)
+	if not istable(decoded) then return nil end
+	return decoded
+end
+
 function Format.FormatMessage(message, messageData, displayFull)
 	if message == "run" then
 		if messageData[1] ~= true then
@@ -543,8 +650,13 @@ function Format.FormatMessage(message, messageData, displayFull)
 		end
 	end
 
+	-- Captured console functions ship their args as a color-aware segment list (rendered
+	-- verbatim by the console) rather than the indexed dump used for run return values.
+	if Format.MessageFuncSet[message] then
+		return Format.FormatMsgSegments(message, messageData.args, messageData.n, displayFull)
+	end
+
 	Noir.Debug("FormatMessage", messageData)
-	if messageData.args then messageData = messageData.args end
 	local text = ""
 	if #messageData == 1 then
 		local formated, cmt = Format.FormatLong(messageData[1], 0, displayFull)
@@ -582,6 +694,26 @@ function Format.RegisterDashboard()
 				{label = "Sorted by key (SortedPairs)", value = "SortedPairs"},
 				{label = "Sorted by value (SortedPairsByValue)", value = "SortedPairsByValue"}
 			}
+		},
+		-- How a function's body is reconstructed for output. The methods are tried in
+		-- priority order and fall back to the next when disabled or unavailable:
+		-- read from server (not implemented) -> read from local file -> decompile ->
+		-- disassemble (always on). See Format.ResolveFuncSource.
+		{
+			key = "funcSourceLocalFile",
+			type = "bool",
+			label = "Read from local file",
+			description = "Highest priority. Show a function's original source read straight from disk (GAME path) when the file is available. Falls back to decompiling, then disassembling.",
+			category = "Function source",
+			default = false
+		},
+		{
+			key = "funcSourceDecompile",
+			type = "bool",
+			label = "Decompile bytecode",
+			description = "Reconstruct readable pseudo-Lua from a function's bytecode. When off, the raw bytecode disassembly is shown instead. Disassembly is always the final fallback.",
+			category = "Function source",
+			default = true
 		}
 	}, {
 		icon = "icon16/text_align_left.png",
@@ -637,6 +769,8 @@ function Format.GetOutputSettings()
 	if not (CLIENT and Noir.Dashboard) then return {} end
 	return {
 		sortMode = Noir.Dashboard.Get("Output", "tableSort"),
+		funcSourceLocalFile = Noir.Dashboard.Get("Output", "funcSourceLocalFile"),
+		funcSourceDecompile = Noir.Dashboard.Get("Output", "funcSourceDecompile"),
 	}
 end
 
