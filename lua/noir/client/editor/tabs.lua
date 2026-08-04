@@ -256,4 +256,16 @@ function Editor.Tab.SetActive(sessionName, noJS)
 	Editor.Storage.SaveConfig()
 	Editor.Storage.QueueSave()
 	Editor.Sidebar.NavigateToActive()
+	Editor.Tab.RefreshCOH()
+end
+
+-- Refresh the shared COH title for the active tab. A tab type may own its COH via an
+-- optional UpdateCOH(session) hook (console / SQL push their repl panel's); the editor
+-- type has none, so it falls back to the editor line/warning COH. Called on tab switch
+-- so the title always reflects the tab you're looking at.
+function Editor.Tab.RefreshCOH()
+	local session = Editor.ActiveSession
+	if not session then return end
+	local def = Editor.TabTypes.Get(session)
+	if def.UpdateCOH then def.UpdateCOH(session) else Editor.Run.UpdateCOH() end
 end

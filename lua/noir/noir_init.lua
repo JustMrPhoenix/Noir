@@ -71,20 +71,7 @@ local function loadModule(path)
 		state = "SV"
 	end
 
-	-- Display name = path minus the realm folder, minus extension.
-	-- e.g. "client/editor/sessions.lua" -> "editor/sessions"
-	local nameparts = {}
-	for _, seg in ipairs(namesplit) do
-		if seg ~= "client" and seg ~= "server" then
-			nameparts[#nameparts + 1] = seg
-		end
-	end
-	local name = table.concat(nameparts, "/"):Split(".")[1]
-
 	if SERVER and state ~= "SV" then AddCSLuaFile(path) end
-	if string.len(name) > 22 then name = string.Left(name, 19) .. "..." end
-	local str = Format("| [%s] MODULE: %-22s |", state, name)
-	print(str)
 	if state == "CL" and SERVER then return end
 	include(path)
 end
@@ -98,10 +85,6 @@ function Noir.Load()
 	-- Create storage folder if it doesn't exist
 	if CLIENT and not file.Exists(Noir.STORAGE_PATH, "DATA") then file.CreateDir(Noir.STORAGE_PATH) end
 	require("luacheck")
-	print("+-------------------------------------+")
-	print("|               -Noir-                |")
-	print("+-------------------------------------+")
-	print("|                                     |")
 	loadModule("logging.lua")
 	loadModule("utils.lua")
 	loadModule("network.lua")
@@ -116,6 +99,8 @@ function Noir.Load()
 	loadModule("db.lua")
 	loadModule("client/autocomplete.lua")
 	loadModule("client/skin.lua")
+	loadModule("client/gcompute_compat.lua")
+	loadModule("client/luadev_compat.lua")
 	loadModule("client/file_browser.lua")
 	loadModule("client/monaco_panel.lua")
 	loadModule("client/editor/init.lua")
@@ -139,8 +124,6 @@ function Noir.Load()
 	loadModule("client/autorun.lua")
 	loadModule("ndl/load.lua")
 	NDL.Load()
-	print("|                                     |")
-	print("+----------Loading complete-----------+")
 	Noir.Msg("Loaded!\n")
 	-- Register native dashboard tabs in a deterministic order before any
 	-- autorun script runs, so user-registered tabs always appear after ours.

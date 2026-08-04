@@ -192,14 +192,20 @@ end
 -- by the dropdown options and the Tab cycling.
 function PANEL:SetTarget(label, target, icon)
 	-- Every non-self target (server / shared / clients / a specific player) needs the
-	-- server to run Noir. If it doesn't (the net string was never registered), warn
-	-- and fall back to self rather than letting the run fail at send time. Keep the
+	-- server to run Noir -- or a fallback runtime this client can speak (GCompute /
+	-- luadev). If neither is available (net string absent and no fallback), warn and
+	-- fall back to self rather than letting the run fail at send time. Keep the
 	-- persisted preference untouched so the choice restores on a Noir-capable server.
 	local fellBack = false
 	if target ~= "self" and util.NetworkStringToID(Noir.Network.Tag) == 0 then
-		self:SetStatus("Server isn't running Noir - falling back to self", Color(150, 0, 0), true)
-		label, target, icon = "Run on self", "self", "icon16/user.png"
-		fellBack = true
+		local fallback = Noir.RemoteFallback()
+		if fallback then
+			self:SetStatus("Server has no Noir - using " .. (fallback == Noir.GCompute and "GCompute" or "luadev") .. " fallback", Color(150, 100, 0), true)
+		else
+			self:SetStatus("Server isn't running Noir - falling back to self", Color(150, 0, 0), true)
+			label, target, icon = "Run on self", "self", "icon16/user.png"
+			fellBack = true
+		end
 	end
 
 	self.Target = target
@@ -509,10 +515,11 @@ function PANEL:OnRunResult(identifier, sender, channelId, done, returns)
 			Noir.Editor.MonacoPanel:SetStatus(Format("[%s] Error:%s", senderName, msg), Color(150, 0, 0), true)
 		end
 	elseif not self.hasError then
+		local fb = Noir.RemoteFallbackSuffix(self.Target)
 		if self.targets ~= 1 then
-			self:SetStatus(Format("[%i/%i] Ran on %s successfully", self.totalRan, self.targets, senderName), Color(0, 150, 0), true)
+			self:SetStatus(Format("[%i/%i] Ran on %s successfully%s", self.totalRan, self.targets, senderName, fb), Color(0, 150, 0), true)
 		else
-			self:SetStatus(Format("Ran on %s successfully", senderName), Color(0, 150, 0), true)
+			self:SetStatus(Format("Ran on %s successfully%s", senderName, fb), Color(0, 150, 0), true)
 		end
 	end
 
@@ -551,16 +558,22 @@ function PANEL:OnMessage(target, replName, sender, channelId, message, messageBo
 	if not isRunResult and Noir.Format.MessageFuncSet[message] then
 		local decoded = Noir.Format.DecodeMsgSegments(messageBody)
 		if decoded then
-			local segments = {
-				Format("--[[%-13s: ", replName),
-				realmColor, realmName, false,
-				Format(" : %s]] ", message),
-			}
+			-- "code" is a verbatim Lua code/result block (e.g. GCompute's decompiled
+			-- function or table dump): render it raw, with no realm prefix, so it reads
+			-- as clean code. Everything else gets the "--[[repl : realm : msg]]" prefix.
+			local segments = {}
+			if message ~= "code" then
+				segments = {
+					Format("--[[%-13s: ", replName),
+					realmColor, realmName, false,
+					Format(" : %s]] ", message),
+				}
 
-			-- Tint the whole body (e.g. ErrorNoHalt red); MsgC's own color segments
-			-- below still override it wherever it sets one.
-			local bodyColor = MESSAGE_COLORS[message]
-			if bodyColor then segments[#segments + 1] = bodyColor end
+				-- Tint the whole body (e.g. ErrorNoHalt red); MsgC's own color segments
+				-- below still override it wherever it sets one.
+				local bodyColor = MESSAGE_COLORS[message]
+				if bodyColor then segments[#segments + 1] = bodyColor end
+			end
 			for _, seg in ipairs(decoded) do
 				if seg.c then
 					segments[#segments + 1] = Color(seg.c[1], seg.c[2], seg.c[3])
@@ -684,9 +697,27 @@ function PANEL:JS_OnFileExistsRequest(path, requestId)
 	self:RunJS("replinterface.ProvideFileExists(%d, %s)", requestId, Noir.Utils.FileReadable("GAME", path) and "true" or "false")
 end
 
+-- A repl panel shares the single global COH title. Only the panel of the active tab
+-- (or a standalone repl window that isn't a tab at all) may write it, so a background
+-- console -- e.g. the Main Console receiving an editor run's output -- can't clobber
+-- the active tab's COH.
+function PANEL:OwnsCOH()
+	local Editor = Noir.Editor
+	if not Editor then return true end
+	for _, s in ipairs(Editor.Sessions or {}) do
+		local rp = s.ReplPanel or (s.DBPanel and s.DBPanel.ReplPanel)
+		if rp == self then return s == Editor.ActiveSession end
+	end
+	return true -- not a tab panel (standalone repl window) -> owns its own COH
+end
+
 function PANEL:UpdateCOH()
 	if not coh then return end
-	local cohText = Format("%d repls so far\n%s", self.ReplCounter or 0, self.status or "Status uknown")
+	if not self:OwnsCOH() then return end
+	-- Strip the "[via GCompute]"/"[via luadev]" fallback suffix from the console
+	-- header title -- it belongs on the bottom status line, not the COH title.
+	local status = (self.status or "Status uknown"):gsub("%s*%[via [^%]]+%]$", "")
+	local cohText = Format("%d repls so far\n%s", self.ReplCounter or 0, status)
 	coh.SendTypedMessage(Noir.Utils.CenterCOHTitle(cohText, "[Noir Console]"))
 end
 

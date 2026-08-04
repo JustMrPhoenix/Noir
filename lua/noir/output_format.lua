@@ -33,6 +33,10 @@ Format.MessageFuncSet = {
 	MsgAll = true,
 	ErrorNoHalt = true,
 	PrintMessage = true,
+	-- A colored code/result block rendered verbatim WITHOUT the console's realm
+	-- prefix (see repl OnMessage). Used by the GCompute fallback for output that is
+	-- Lua code/result (its first line is a "--" comment) rather than raw console text.
+	code = true,
 }
 
 -- Output shape per function, mirroring the real GMod calls: how args are joined. Only MsgC
@@ -47,6 +51,7 @@ local MSG_SHAPE = {
 	MsgAll = {sep = ""},
 	ErrorNoHalt = {sep = ""},
 	PrintMessage = {sep = " "},
+	code = {sep = "", color = true},
 }
 
 -- Format a number for a vector/angle component: keep up to 3 decimals but strip

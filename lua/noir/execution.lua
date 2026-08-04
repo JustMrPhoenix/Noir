@@ -209,9 +209,37 @@ local function parseOutputFlags(code, data)
 	end
 end
 
+-- When the server isn't running Noir, pick a fallback runtime to speak instead:
+-- GCompute first (it streams real output back), then luadev. Returns the compat
+-- sender module (Noir.SendCode-shaped .SendCode), or nil if neither is usable.
+-- Shared with the REPL so its target selector can keep non-self targets.
+function Noir.RemoteFallback()
+	if Noir.GCompute and Noir.GCompute.IsAvailable() then return Noir.GCompute end
+	if Noir.LuaDev and Noir.LuaDev.IsAvailable() then return Noir.LuaDev end
+	return nil
+end
+
+-- Suffix noting the fallback runtime a non-self run to the current server goes
+-- through (Noir absent), e.g. " [via GCompute]", or "" when the server runs Noir.
+-- Appended to run-status text so it's clear the run used a fallback.
+function Noir.RemoteFallbackSuffix(target)
+	if target == "self" then return "" end
+	if util.NetworkStringToID(Noir.Network.Tag) ~= 0 then return "" end
+	local fallback = Noir.RemoteFallback()
+	if fallback == Noir.GCompute then return " [via GCompute]" end
+	if fallback == Noir.LuaDev then return " [via luadev]" end
+	return ""
+end
+
 function Noir.SendCode(code, target, identifier, channelId, opts)
-	if util.NetworkStringToID(Noir.Network.Tag) == 0 and target ~= "self" then
-		Noir.ErrorT("This server does not seem to run Noir")
+	if target ~= "self" and util.NetworkStringToID(Noir.Network.Tag) == 0 then
+		-- Noir isn't on the server. Fall back to a runtime the server does run
+		-- (GCompute, else luadev) and this client can speak; otherwise error.
+		local fallback = Noir.RemoteFallback()
+		if fallback then
+			return fallback.SendCode(code, target, identifier, channelId, opts)
+		end
+		Noir.ErrorT("This server does not run Noir, GCompute, or luadev")
 	end
 
 	-- Ensure a run channel exists for this id (callers normally OpenChannel first to

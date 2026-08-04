@@ -318,6 +318,11 @@ Editor.TabTypes.Register(Editor.SessionType.SQL, {
 			session.DBPanel:RequestFocus()
 		end
 	end,
+	UpdateCOH = function(session)
+		if IsValid(session.DBPanel) and IsValid(session.DBPanel.ReplPanel) then
+			session.DBPanel.ReplPanel:UpdateCOH()
+		end
+	end,
 	Deactivate = function(session)
 		if IsValid(session.DBPanel) then session.DBPanel:SetVisible(false) end
 	end,

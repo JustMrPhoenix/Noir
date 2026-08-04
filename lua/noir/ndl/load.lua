@@ -1,21 +1,12 @@
 ﻿local NDL = Noir.DebugLib or {}
 Noir.DebugLib = NDL
 _G.NDL = NDL
-local function printModule(path)
-	local str = Format("| [SH] MODULE: %-22s |", path)
-	print(str)
-end
 
 function NDL.Load()
-	print("+--------Loading debug library--------+")
 	include("noir/ndl/logging.lua")
-	printModule("ndl/" .. "logging")
 	include("noir/ndl/execution.lua")
-	printModule("ndl/" .. "execution")
 	include("noir/ndl/injection.lua")
-	printModule("ndl/" .. "injection")
 	include("noir/ndl/utils.lua")
-	printModule("ndl/" .. "utils")
 	if SERVER then
 		AddCSLuaFile("noir/ndl/logging.lua")
 		AddCSLuaFile("noir/ndl/execution.lua")

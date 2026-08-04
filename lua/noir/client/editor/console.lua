@@ -198,6 +198,9 @@ Editor.TabTypes.Register(Editor.SessionType.Console, {
 			session.ReplPanel:RequestFocus()
 		end
 	end,
+	UpdateCOH = function(session)
+		if IsValid(session.ReplPanel) then session.ReplPanel:UpdateCOH() end
+	end,
 	Deactivate = function(session)
 		if IsValid(session.ReplPanel) then session.ReplPanel:SetVisible(false) end
 	end,

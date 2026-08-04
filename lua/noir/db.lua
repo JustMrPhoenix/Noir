@@ -187,6 +187,10 @@ if CLIENT then
 	-- for a schema column. `tableName` is included in the detail when the column isn't
 	-- already scoped to a table by the request.
 	local function columnItem(col, tableName)
+		-- A completion item MUST have a string label: the Monaco frontend calls
+		-- label.toLowerCase() on it, so a nil/empty name would crash the suggest
+		-- widget. Skip nameless columns rather than emit a labelless item.
+		if not isstring(col.name) or col.name == "" then return nil end
 		local detail = col.type or "column"
 		if tableName then detail = detail .. " · " .. tableName end
 		if (tonumber(col.pk) or 0) > 0 then detail = detail .. " · PK" end
@@ -215,9 +219,10 @@ if CLIENT then
 		if context.lastChar == "." and ident ~= "" then
 			local want = string.lower(ident)
 			for _, tbl in ipairs(tables) do
-				if string.lower(tbl.name) == want then
+				if isstring(tbl.name) and string.lower(tbl.name) == want then
 					for _, col in ipairs(tbl.columns or {}) do
-						items[#items + 1] = columnItem(col, nil)
+						local item = columnItem(col, nil)
+						if item then items[#items + 1] = item end
 					end
 
 					break
@@ -229,16 +234,21 @@ if CLIENT then
 
 		local seenCols = {}
 		for _, tbl in ipairs(tables) do
-			local colCount = #(tbl.columns or {})
-			items[#items + 1] = {
-				label = tbl.name,
-				kind = "Class",
-				detail = Format("table · %d column%s", colCount, colCount == 1 and "" or "s")
-			}
-			for _, col in ipairs(tbl.columns or {}) do
-				if not seenCols[col.name] then
-					seenCols[col.name] = true
-					items[#items + 1] = columnItem(col, tbl.name)
+			-- Skip a nameless table for the same reason columnItem does (labelless
+			-- items crash the Monaco suggest widget).
+			if isstring(tbl.name) and tbl.name ~= "" then
+				local colCount = #(tbl.columns or {})
+				items[#items + 1] = {
+					label = tbl.name,
+					kind = "Class",
+					detail = Format("table · %d column%s", colCount, colCount == 1 and "" or "s")
+				}
+				for _, col in ipairs(tbl.columns or {}) do
+					local item = columnItem(col, tbl.name)
+					if item and not seenCols[col.name] then
+						seenCols[col.name] = true
+						items[#items + 1] = item
+					end
 				end
 			end
 		end

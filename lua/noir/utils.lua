@@ -85,8 +85,10 @@ function Utils.CenterCOHTitle(text, title)
 		maxLineLen = math.max(maxLineLen, string.len(line))
 	end
 
-	local indent = string.rep(" ", math.ceil(maxLineLen / 2))
-	return indent .. title .. indent .. "\n" .. text
+	-- Center the title WITHIN the content width, rather than padding half the
+	-- content width on each side (which made the title line content+title wide).
+	local indent = string.rep(" ", math.max(0, math.floor((maxLineLen - string.len(title)) / 2)))
+	return indent .. title .. "\n" .. text
 end
 
 -- Forward one run-channel message into a console-style panel (anything with

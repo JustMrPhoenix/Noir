@@ -91,10 +91,11 @@ function Editor.Run.Execute(session, target)
 				Editor.MonacoPanel:SetStatus(Format("[%s] Error: %s at line %s", senderName, msg, line), Color(150, 0, 0), true)
 			end
 		elseif not hasError then
+			local fb = Noir.RemoteFallbackSuffix(target)
 			if targets ~= 1 then
-				Editor.MonacoPanel:SetStatus(Format("[%i/%i] Ran on %s successfully", totalRan, targets, senderName), Color(0, 150, 0), true)
+				Editor.MonacoPanel:SetStatus(Format("[%i/%i] Ran on %s successfully%s", totalRan, targets, senderName, fb), Color(0, 150, 0), true)
 			else
-				Editor.MonacoPanel:SetStatus(Format("Ran on %s successfully", senderName), Color(0, 150, 0), true)
+				Editor.MonacoPanel:SetStatus(Format("Ran on %s successfully%s", senderName, fb), Color(0, 150, 0), true)
 			end
 		end
 	end, id, "run")
@@ -143,6 +144,10 @@ end
 
 function Editor.Run.UpdateCOH()
 	if not coh or not Editor.ActiveSession then return end
+	-- Only the Monaco editor type owns the "[Noir Editor]" line/warning COH. Console
+	-- and SQL tabs push their own COH (see their type's UpdateCOH), so bail for them --
+	-- otherwise a Monaco validation event would clobber their title with editor stats.
+	if not Editor.TabTypes.Get(Editor.ActiveSession).caps.monaco then return end
 	local cohText = Format(
 		"%d Tab(s) - Current: %s\n%d line(s)",
 		#Editor.Sessions, Editor.ActiveSession.name, #string.Split(Editor.ActiveSession.code, "\n")
